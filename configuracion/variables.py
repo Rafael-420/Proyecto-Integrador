@@ -77,3 +77,32 @@ SMTP_FROM_NAME = _leer("CORALLIE_SMTP_FROM_NAME", "Corallie Bubble")
 # ------------------------------------------------------------
 COLOR_PRINCIPAL = "#C86DD7"
 COLOR_FONDO = "#F9F6FB"
+
+
+# ------------------------------------------------------------
+# Politica de seguridad y autenticacion
+# Usada por servicios/servicio_seguridad.py y
+# servicios/servicio_autenticacion.py
+# ------------------------------------------------------------
+# Iteraciones de PBKDF2-SHA256. Mas alto = mas costoso de romper por
+# fuerza bruta, pero tambien mas lento al iniciar sesion. 120 000 es
+# un punto razonable tanto en escritorio como en el APK.
+SEG_ITERACIONES = _leer_int("SEG_ITERACIONES", 120_000)
+
+SEG_LONGITUD_MINIMA = _leer_int("SEG_LONGITUD_MINIMA", 8)
+SEG_EXIGIR_LETRA = _leer_bool("SEG_EXIGIR_LETRA", True)
+SEG_EXIGIR_DIGITO = _leer_bool("SEG_EXIGIR_DIGITO", True)
+
+# Bloqueo temporal por intentos fallidos
+SEG_INTENTOS_MAXIMOS = _leer_int("SEG_INTENTOS_MAXIMOS", 5)
+SEG_VENTANA_MINUTOS = _leer_int("SEG_VENTANA_MINUTOS", 15)
+SEG_MINUTOS_BLOQUEO = _leer_int("SEG_MINUTOS_BLOQUEO", 15)
+
+
+# ------------------------------------------------------------
+# Roles (coinciden con la columna usuario.Rol)
+# ------------------------------------------------------------
+ROL_ADMIN = "ADMIN"
+ROL_EMPLEADO = "EMPLEADO"
+ROL_CLIENTE = "CLIENTE"
+ROLES_VALIDOS = (ROL_ADMIN, ROL_EMPLEADO, ROL_CLIENTE)

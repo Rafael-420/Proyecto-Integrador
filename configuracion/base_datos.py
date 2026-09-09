@@ -14,6 +14,8 @@ La firma de get_connection() no cambio: el resto del proyecto no
 requiere ninguna modificacion.
 """
 
+from contextlib import contextmanager
+
 import mysql.connector
 from mysql.connector import pooling
 
@@ -112,3 +114,38 @@ def probar_conexion() -> tuple[bool, str]:
                 conn.close()
         except Exception:
             pass
+
+
+# ------------------------------------------------------------
+# Context manager transaccional
+#
+# Agregado para los servicios de autenticacion: abre conexion y cursor,
+# hace commit o rollback segun corresponda y garantiza el cierre.
+# El resto del proyecto puede seguir usando get_connection() como antes.
+# ------------------------------------------------------------
+@contextmanager
+def cursor_bd(diccionario: bool = True, commit: bool = False):
+    """Abre conexion + cursor y garantiza el cierre.
+
+    Ejemplo:
+        with cursor_bd() as cur:
+            cur.execute("SELECT 1")
+            fila = cur.fetchone()
+    """
+    conexion = get_connection()
+    cursor = conexion.cursor(dictionary=diccionario)
+    try:
+        yield cursor
+        if commit:
+            conexion.commit()
+    except Exception:
+        try:
+            conexion.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            cursor.close()
+        finally:
+            conexion.close()

@@ -1,9 +1,11 @@
-import hashlib
+import asyncio
 from pathlib import Path
 
 import flet as ft
 
 from configuracion.base_datos import get_connection
+from servicios import servicio_autenticacion as autenticacion
+from servicios import servicio_seguridad as seguridad
 from vistas.vista_registro import RegistroView
 from servicios.corte_manager import abrir_corte
 from vistas.vista_admin import admin_view
@@ -54,6 +56,7 @@ ICON_LOCK = _icon("LOCK_OUTLINE", "LOCK", "PASSWORD")
 ICON_ARROW = _icon("ARROW_FORWARD", "EAST", "CHEVRON_RIGHT")
 ICON_REGISTER = _icon("PERSON_ADD_ALT_1", "PERSON_ADD", "ADD")
 ICON_RESET = _icon("LOCK_RESET", "LOCK_OPEN", "HELP_OUTLINE")
+ICON_MAIL = _icon("MAIL_OUTLINE", "EMAIL", "ALTERNATE_EMAIL")
 
 
 # ------------------------------------------------------------
@@ -71,6 +74,13 @@ COLOR_INPUT_BG = "#FCFAFE"
 COLOR_INPUT_BORDER = "#B879F0"
 COLOR_ICON_BG = "#EFE6F8"
 COLOR_DECOR = "#D3A7F1"
+
+COLOR_ERROR = "#D32F2F"
+COLOR_AVISO = "#E08A1E"
+COLOR_EXITO = "#2E7D48"
+
+# Colores del indicador de fortaleza (0 a 4)
+COLORES_NIVEL = ("#D32F2F", "#E0621E", "#E0A81E", "#66A63C", "#2E7D48")
 
 
 # ------------------------------------------------------------
@@ -116,11 +126,16 @@ def LoginView(page: ft.Page):
     ancho_card = min(640, ancho_pagina - 24) if es_movil else 640
     ancho_campo = ancho_card - 76  # deja el margen del padding del card (38+38)
 
+    origen_login = "movil" if es_movil else "escritorio"
+
+    # Estado interno de la pantalla
+    estado = {"cargando": False}
+
     # --------------------------------------------------------
     # Campos
     # --------------------------------------------------------
     txt_user = ft.TextField(
-        hint_text="Correo o Usuario",
+        hint_text="Usuario",
         border=INPUT_BORDER_NONE,
         text_style=ft.TextStyle(
             font_family="Fredoka",
@@ -160,10 +175,103 @@ def LoginView(page: ft.Page):
     lbl_msg = ft.Text(
         "",
         size=12,
-        color="#D32F2F",
+        color=COLOR_ERROR,
         text_align=ft.TextAlign.CENTER,
         font_family="Fredoka",
     )
+
+    # --------------------------------------------------------
+    # Utilidades de interfaz
+    # --------------------------------------------------------
+    def mostrar_mensaje(texto: str, color: str = COLOR_ERROR):
+        lbl_msg.value = texto
+        lbl_msg.color = color
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _abrir_dialogo(dialogo):
+        try:
+            if dialogo not in page.overlay:
+                page.overlay.append(dialogo)
+        except Exception:
+            pass
+        try:
+            page.open(dialogo)
+            return
+        except Exception:
+            pass
+        try:
+            page.dialog = dialogo
+        except Exception:
+            pass
+        dialogo.open = True
+        page.update()
+
+    def _cerrar_dialogo(dialogo):
+        try:
+            page.close(dialogo)
+        except Exception:
+            dialogo.open = False
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    contenido_boton = ft.Row(
+        controls=[
+            ft.Text(
+                "Iniciar sesión",
+                color="white",
+                size=21,
+                weight=ft.FontWeight.BOLD,
+                font_family="Fredoka",
+            ),
+            ft.Icon(ICON_ARROW, color="white", size=34)
+            if ICON_ARROW is not None
+            else ft.Text("→", color="white", size=34),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=26,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    contenido_boton_cargando = ft.Row(
+        controls=[
+            ft.ProgressRing(width=24, height=24, stroke_width=3, color="white"),
+            ft.Text(
+                "Verificando...",
+                color="white",
+                size=19,
+                weight=ft.FontWeight.BOLD,
+                font_family="Fredoka",
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=18,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    def marcar_cargando(activo: bool):
+        estado["cargando"] = activo
+        btn_login.content = contenido_boton_cargando if activo else contenido_boton
+        btn_login.bgcolor = COLOR_MORADO_CLARO if activo else COLOR_MORADO
+        txt_user.disabled = activo
+        txt_pass.disabled = activo
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    async def en_segundo_plano(funcion, *argumentos):
+        """Ejecuta trabajo bloqueante fuera del hilo de la interfaz.
+
+        El hasheo PBKDF2 usa 120 000 iteraciones a propósito: sin esto la
+        ventana se congelaría una fracción de segundo en cada intento.
+        """
+        bucle = asyncio.get_running_loop()
+        return await bucle.run_in_executor(None, funcion, *argumentos)
 
     # --------------------------------------------------------
     # Almacenamiento compatible
@@ -188,20 +296,15 @@ def LoginView(page: ft.Page):
                 pass
 
     # --------------------------------------------------------
-    # Iniciar sesión
+    # Enrutamiento posterior al inicio de sesión
     # --------------------------------------------------------
-    async def login(e=None):
+    async def continuar_sesion(usuario):
+        """Decide a qué pantalla enviar al usuario ya autenticado."""
 
-        user = (txt_user.value or "").strip()
-        password = (txt_pass.value or "").strip()
-
-        if not user or not password:
-            lbl_msg.value = "Ingresa usuario y contraseña"
-            lbl_msg.color = "#D32F2F"
-            page.update()
+        # Administrador
+        if usuario.es_admin or usuario.nombre_usuario.lower() == "admin":
+            page.go("/admin")
             return
-
-        password_hash = hashlib.sha256(password.encode("utf-8")).hexdigest()
 
         conn = None
         cursor = None
@@ -210,30 +313,6 @@ def LoginView(page: ft.Page):
             conn = get_connection()
             cursor = conn.cursor(dictionary=True)
 
-            cursor.execute(
-                """
-                SELECT IdUsuario, NombreUsuario
-                FROM usuario
-                WHERE NombreUsuario=%s AND (Contraseña=%s OR Contraseña=%s)
-                """,
-                (user, password, password_hash),
-            )
-            user_row = cursor.fetchone()
-
-            if not user_row:
-                lbl_msg.value = "Usuario o contraseña incorrectos"
-                lbl_msg.color = "#D32F2F"
-                page.update()
-                return
-
-            id_usuario = user_row["IdUsuario"]
-            nombre_usuario = str(user_row.get("NombreUsuario", "")).strip()
-
-            # Admin
-            if nombre_usuario.lower() == "admin":
-                page.go("/admin")
-                return
-
             # Empleado
             cursor.execute(
                 """
@@ -241,18 +320,20 @@ def LoginView(page: ft.Page):
                 FROM empleado
                 WHERE Usuario_IdUsuario=%s
                 """,
-                (id_usuario,),
+                (usuario.id,),
             )
             emp = cursor.fetchone()
 
             if emp:
                 id_empleado = int(emp["IdEmpleado"])
-                nombre_empleado = emp.get("Nombre") or nombre_usuario
+                nombre_empleado = emp.get("Nombre") or usuario.nombre_usuario
 
                 corte_id = abrir_corte(id_empleado)
                 await storage_set("corte_id", int(corte_id))
                 await storage_set("empleado", nombre_empleado)
                 await storage_set("empleado_id", int(id_empleado))
+                await storage_set("usuario_id", int(usuario.id))
+                await storage_set("rol", usuario.rol)
 
                 page.go("/pos")
                 return
@@ -264,28 +345,26 @@ def LoginView(page: ft.Page):
                 FROM cliente
                 WHERE Usuario_IdUsuario=%s
                 """,
-                (id_usuario,),
+                (usuario.id,),
             )
             cli = cursor.fetchone()
 
             if cli:
                 id_cliente = int(cli["IdCliente"])
-                nombre_cliente = cli.get("Nombre") or nombre_usuario
+                nombre_cliente = cli.get("Nombre") or usuario.nombre_usuario
 
                 await storage_set("cliente_id", id_cliente)
                 await storage_set("cliente", nombre_cliente)
+                await storage_set("usuario_id", int(usuario.id))
+                await storage_set("rol", usuario.rol)
 
                 page.go("/menu")
                 return
-            
-            lbl_msg.value = "Tu usuario no está ligado a cliente ni empleado"
-            lbl_msg.color = "#D32F2F"
-            page.update()
+
+            mostrar_mensaje("Tu usuario no está ligado a cliente ni empleado")
 
         except Exception as ex:
-            lbl_msg.value = f"Error al conectar con la base de datos: {ex}"
-            lbl_msg.color = "#D32F2F"
-            page.update()
+            mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
 
         finally:
             try:
@@ -297,15 +376,262 @@ def LoginView(page: ft.Page):
                 pass
 
     # --------------------------------------------------------
+    # Cambio obligatorio de contraseña
+    # --------------------------------------------------------
+    async def pedir_cambio_password(usuario, password_actual):
+        """Se muestra cuando la cuenta trae una contraseña temporal."""
+
+        txt_nueva = ft.TextField(
+            label="Nueva contraseña",
+            password=True,
+            can_reveal_password=True,
+            width=320,
+            border_color=COLOR_INPUT_BORDER,
+            text_style=ft.TextStyle(font_family="Fredoka", color=COLOR_TEXTO),
+        )
+
+        txt_confirmar = ft.TextField(
+            label="Confirmar contraseña",
+            password=True,
+            can_reveal_password=True,
+            width=320,
+            border_color=COLOR_INPUT_BORDER,
+            text_style=ft.TextStyle(font_family="Fredoka", color=COLOR_TEXTO),
+        )
+
+        lbl_nivel = ft.Text("", size=12, font_family="Fredoka", color=COLOR_PLACEHOLDER)
+        lbl_dlg = ft.Text("", size=12, color=COLOR_ERROR, font_family="Fredoka")
+
+        def evaluar(e=None):
+            valor = txt_nueva.value or ""
+            if not valor:
+                lbl_nivel.value = ""
+            else:
+                nivel, etiqueta = seguridad.evaluar_nivel(valor)
+                lbl_nivel.value = f"Seguridad: {etiqueta}"
+                lbl_nivel.color = COLORES_NIVEL[nivel]
+            page.update()
+
+        txt_nueva.on_change = evaluar
+
+        async def guardar(e=None):
+            nueva = txt_nueva.value or ""
+            confirmar = txt_confirmar.value or ""
+
+            if nueva != confirmar:
+                lbl_dlg.value = "Las contraseñas no coinciden."
+                page.update()
+                return
+
+            politica = seguridad.validar_fortaleza(nueva, usuario.nombre_usuario)
+            if not politica.valida:
+                lbl_dlg.value = politica.mensaje
+                page.update()
+                return
+
+            resultado = await en_segundo_plano(
+                autenticacion.cambiar_contrasena, usuario.id, password_actual, nueva
+            )
+
+            if not resultado.exito:
+                lbl_dlg.value = resultado.mensaje
+                page.update()
+                return
+
+            _cerrar_dialogo(dialogo)
+            usuario.requiere_cambio = False
+            mostrar_mensaje("Contraseña actualizada correctamente.", COLOR_EXITO)
+            await continuar_sesion(usuario)
+
+        def cancelar(e=None):
+            _cerrar_dialogo(dialogo)
+            txt_pass.value = ""
+            mostrar_mensaje(
+                "Debes cambiar tu contraseña temporal para poder entrar.",
+                COLOR_AVISO,
+            )
+
+        dialogo = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Cambia tu contraseña",
+                font_family="Fredoka",
+                color=COLOR_MORADO,
+                weight=ft.FontWeight.BOLD,
+            ),
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        "Tu cuenta usa una contraseña temporal. "
+                        "Define una nueva para continuar.",
+                        size=13,
+                        color=COLOR_TEXTO,
+                        font_family="Fredoka",
+                    ),
+                    txt_nueva,
+                    lbl_nivel,
+                    txt_confirmar,
+                    lbl_dlg,
+                ],
+                tight=True,
+                spacing=10,
+                width=340,
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=cancelar),
+                ft.FilledButton("Guardar", on_click=guardar),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        _abrir_dialogo(dialogo)
+
+    # --------------------------------------------------------
+    # Iniciar sesión
+    # --------------------------------------------------------
+    async def login(e=None):
+        if estado["cargando"]:
+            return
+
+        user = (txt_user.value or "").strip()
+        password = txt_pass.value or ""
+
+        if not user or not password:
+            mostrar_mensaje("Ingresa usuario y contraseña")
+            return
+
+        mostrar_mensaje("")
+        marcar_cargando(True)
+
+        try:
+            resultado = await en_segundo_plano(
+                autenticacion.autenticar, user, password, origen_login
+            )
+        except Exception as ex:
+            marcar_cargando(False)
+            mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
+            return
+
+        marcar_cargando(False)
+
+        if not resultado.exito:
+            color = COLOR_AVISO if resultado.motivo == "bloqueado" else COLOR_ERROR
+            mostrar_mensaje(resultado.mensaje, color)
+            txt_pass.value = ""
+            page.update()
+            return
+
+        usuario = resultado.usuario
+
+        if usuario.requiere_cambio:
+            await pedir_cambio_password(usuario, password)
+            return
+
+        await continuar_sesion(usuario)
+
+    # --------------------------------------------------------
+    # Recuperación de contraseña
+    # --------------------------------------------------------
+    def olvidar(e=None):
+        txt_usuario_sol = ft.TextField(
+            label="Nombre de usuario",
+            width=320,
+            value=(txt_user.value or "").strip(),
+            border_color=COLOR_INPUT_BORDER,
+            text_style=ft.TextStyle(font_family="Fredoka", color=COLOR_TEXTO),
+        )
+
+        txt_correo_sol = ft.TextField(
+            label="Correo registrado",
+            width=320,
+            border_color=COLOR_INPUT_BORDER,
+            text_style=ft.TextStyle(font_family="Fredoka", color=COLOR_TEXTO),
+        )
+
+        dd_tipo = ft.Dropdown(
+            label="Tipo de cuenta",
+            width=320,
+            value="cliente",
+            options=[
+                ft.dropdown.Option("cliente", "Cliente"),
+                ft.dropdown.Option("empleado", "Empleado"),
+            ],
+        )
+
+        lbl_dlg = ft.Text("", size=12, color=COLOR_ERROR, font_family="Fredoka")
+
+        async def enviar(ev=None):
+            nombre = (txt_usuario_sol.value or "").strip()
+            correo = (txt_correo_sol.value or "").strip()
+
+            if not nombre or not correo:
+                lbl_dlg.value = "Completa ambos campos."
+                page.update()
+                return
+
+            try:
+                await en_segundo_plano(
+                    autenticacion.registrar_solicitud,
+                    nombre,
+                    correo,
+                    dd_tipo.value or "cliente",
+                )
+            except autenticacion.ErrorAutenticacion as error:
+                lbl_dlg.value = str(error)
+                page.update()
+                return
+            except Exception as error:
+                lbl_dlg.value = f"No se pudo registrar la solicitud: {error}"
+                page.update()
+                return
+
+            _cerrar_dialogo(dialogo)
+            mostrar_mensaje(
+                "Solicitud enviada. El administrador te hará llegar una "
+                "contraseña temporal.",
+                COLOR_EXITO,
+            )
+
+        dialogo = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(
+                "Recuperar contraseña",
+                font_family="Fredoka",
+                color=COLOR_MORADO,
+                weight=ft.FontWeight.BOLD,
+            ),
+            content=ft.Column(
+                controls=[
+                    ft.Text(
+                        "Se enviará una solicitud al administrador para "
+                        "restablecer tu acceso.",
+                        size=13,
+                        color=COLOR_TEXTO,
+                        font_family="Fredoka",
+                    ),
+                    txt_usuario_sol,
+                    txt_correo_sol,
+                    dd_tipo,
+                    lbl_dlg,
+                ],
+                tight=True,
+                spacing=10,
+                width=340,
+            ),
+            actions=[
+                ft.TextButton("Cancelar", on_click=lambda ev: _cerrar_dialogo(dialogo)),
+                ft.FilledButton("Enviar solicitud", on_click=enviar),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END,
+        )
+
+        _abrir_dialogo(dialogo)
+
+    # --------------------------------------------------------
     # Acciones de links
     # --------------------------------------------------------
     def ir_registro(e=None):
         page.go("/registro")
-
-    def olvidar(e=None):
-        lbl_msg.value = "Función próximamente disponible"
-        lbl_msg.color = COLOR_MORADO
-        page.update()
 
     # --------------------------------------------------------
     # Componentes visuales
@@ -368,6 +694,10 @@ def LoginView(page: ft.Page):
     input_user = input_login(ICON_PERSON, txt_user)
     input_pass = input_login(ICON_LOCK, txt_pass)
 
+    # Enter en el campo de contraseña también inicia sesión
+    txt_pass.on_submit = login
+    txt_user.on_submit = login
+
     btn_login = ft.Container(
         width=ancho_campo,
         height=62,
@@ -381,23 +711,7 @@ def LoginView(page: ft.Page):
         ),
         ink=True,
         on_click=login,
-        content=ft.Row(
-            controls=[
-                ft.Text(
-                    "Iniciar sesión",
-                    color="white",
-                    size=21,
-                    weight=ft.FontWeight.BOLD,
-                    font_family="Fredoka",
-                ),
-                ft.Icon(ICON_ARROW, color="white", size=34)
-                if ICON_ARROW is not None
-                else ft.Text("→", color="white", size=34),
-            ],
-            alignment=ft.MainAxisAlignment.CENTER,
-            spacing=26,
-            vertical_alignment=ft.CrossAxisAlignment.CENTER,
-        ),
+        content=contenido_boton,
     )
 
     card_login = ft.Container(
