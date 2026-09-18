@@ -1,10 +1,10 @@
 import asyncio
-import hashlib
 from datetime import datetime
 
 import flet as ft
 
 from configuracion.base_datos import get_connection
+from servicios import servicio_seguridad as seguridad
 from servicios.corte_manager import obtener_info_corte, resumen_por_corte, cerrar_corte
 from servicios.servicio_empleados import obtener_empleado_por_id, actualizar_empleado_perfil
 from validaciones.validacion_personas import validar_nombre, validar_telefono, validar_correo
@@ -259,13 +259,13 @@ def build_sidebar(
             cur = None
             try:
                 password_actual = str(password_actual or "").strip()
-                password_hash = hashlib.sha256(password_actual.encode("utf-8")).hexdigest()
 
                 conn = get_connection()
                 cur = conn.cursor(dictionary=True)
 
                 # 1) Validar contra la contraseña actual del usuario.
-                # Soporta contraseña en texto plano o SHA-256.
+                # servicio_seguridad reconoce PBKDF2, SHA-256 heredado
+                # y texto plano, asi que sirve durante la migracion.
                 cur.execute(
                     """
                     SELECT u.IdUsuario, u.NombreUsuario, u.Contraseña
@@ -283,7 +283,7 @@ def build_sidebar(
                 id_usuario = int(row["IdUsuario"])
                 password_bd = str(row.get("Contraseña") or "")
 
-                if password_bd == password_actual or password_bd == password_hash:
+                if seguridad.verificar(password_actual, password_bd).valida:
                     return True, id_usuario
 
                 # 2) Validar contra la última contraseña provisional pendiente/atendida.
@@ -303,7 +303,7 @@ def build_sidebar(
                     )
                     sol = cur.fetchone()
                     temporal = str((sol or {}).get("PasswordTemporal") or "")
-                    if temporal and temporal == password_actual:
+                    if temporal and seguridad.verificar(password_actual, temporal).valida:
                         return True, id_usuario
                 except Exception:
                     # Si la tabla/columna no existe, simplemente se valida con usuario.Contraseña.
@@ -323,7 +323,7 @@ def build_sidebar(
             conn = None
             cur = None
             try:
-                password_hash = hashlib.sha256(str(password_nueva).encode("utf-8")).hexdigest()
+                password_hash = seguridad.hashear(str(password_nueva))
                 conn = get_connection()
                 cur = conn.cursor()
                 cur.execute(
@@ -383,8 +383,8 @@ def build_sidebar(
                 if not password_nueva:
                     txt_pass_nueva.error_text = "Ingresa la nueva contraseña"
                     ok_password = False
-                elif len(password_nueva) < 6:
-                    txt_pass_nueva.error_text = "Mínimo 6 caracteres"
+                elif not seguridad.validar_fortaleza(password_nueva).valida:
+                    txt_pass_nueva.error_text = seguridad.validar_fortaleza(password_nueva).mensaje
                     ok_password = False
 
                 if not password_confirmar:

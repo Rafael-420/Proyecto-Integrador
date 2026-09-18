@@ -183,6 +183,11 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                 )
             row = cur.fetchone()
             return (row[0] or 0) > 0
+        except Exception:
+            raise RuntimeError(
+                "No se pudo verificar si el nombre de usuario ya existe. "
+                "Revisa tu conexión e inténtalo de nuevo."
+            )
         finally:
             try:
                 if cur:  cur.close()
@@ -216,6 +221,14 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                     nombre_campo = "teléfono" if campo == "Telefono" else "correo"
                     return True, f"Ese {nombre_campo} ya está registrado en {label}"
             return False, None
+        except Exception:
+            # Sin esto, un corte con la base de datos en la nube hacía que
+            # la excepción saliera de guardar() y el botón no respondiera.
+            nombre_campo = "teléfono" if campo == "Telefono" else "correo"
+            raise RuntimeError(
+                f"No se pudo verificar si el {nombre_campo} ya está registrado. "
+                "Revisa tu conexión e inténtalo de nuevo."
+            )
         finally:
             try:
                 if cur:  cur.close()
@@ -428,14 +441,86 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
     #   - no permite mayúsculas ni espacios
     #   - valida mientras se escribe y avisa en verde cuando ya es válido
     #   - ofrece botones de dominio para completarlo de un toque
+    def _seguro(fn):
+        """Envuelve un handler para que ningún error quede en silencio.
+
+        Los chequeos de duplicados consultan la base de datos en la nube.
+        Si esa consulta falla (conexión caída, timeout de Railway), la
+        excepción salía de guardar() y Flet sólo la registraba en la
+        consola: para el usuario el botón Guardar simplemente no hacía
+        nada, sin marcar ningún campo en rojo.
+        """
+        def envuelto(e=None):
+            try:
+                return fn(e)
+            except Exception as ex:
+                show_snack(f"No se pudo procesar el formulario: {ex}", ok=False)
+        return envuelto
+
+    def _refrescar_campos(campos, dialogo=None):
+        """Repinta los campos para que se vea el error_text.
+
+        page.update() no siempre propaga a los controles que viven dentro
+        del overlay de un diálogo, así que los errores se marcaban en
+        memoria pero el usuario no veía nada al pulsar Guardar.
+        """
+        for campo in campos:
+            try:
+                campo.update()
+            except Exception:
+                pass
+        if dialogo is not None:
+            try:
+                dialogo.update()
+            except Exception:
+                pass
+        # Siempre se remata con page.update(): si el repintado del campo
+        # o del diálogo no llegó a la pantalla, este sí. Antes se hacía
+        # return tras dialogo.update() y, cuando ese no repintaba, los
+        # errores se quedaban en memoria sin verse.
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def _avisar_errores(campos):
+        """Resume en un mensaje qué campos hay que corregir.
+
+        En celular el diálogo lleva scroll y el campo con error puede
+        quedar fuera de la pantalla; sin este aviso, pulsar Guardar
+        parecía no hacer nada.
+        """
+        con_error = [c for c in campos if getattr(c, "error_text", None)]
+        if not con_error:
+            return
+        etiquetas = ", ".join(str(getattr(c, "label", "") or "campo") for c in con_error)
+        show_snack(f"Revisa: {etiquetas}", ok=False)
+
     DOMINIOS_PERMITIDOS = ("gmail.com", "hotmail.com", "outlook.com", "yahoo.com")
+    AYUDA_BASE = "Dominios aceptados: gmail, hotmail, outlook o yahoo (.com)"
+
+    def _relleno_boton():
+        try:
+            return ft.Padding(left=8, top=2, right=8, bottom=2)
+        except Exception:
+            return None
+
+    def _relleno_contenido(izquierda):
+        try:
+            return ft.Padding(left=izquierda + 20, top=20, right=20, bottom=20)
+        except Exception:
+            return 20
 
     def crear_campo_correo(valor_inicial: str = ""):
-        """Devuelve (campo_correo, bloque_ayuda) listos para el diálogo.
+        """Devuelve (campo_correo, bloque_ayuda).
+
+        El error grave se marca en el error_text del campo, igual que en
+        los demás. Aparte, un aviso en gris justo debajo del recuadro
+        indica qué dominios acepta el sistema, y unos botones completan
+        el correo de un toque.
 
         No se usa helper_text porque esa propiedad cambió de nombre entre
-        versiones de Flet; la guía se dibuja como un Text aparte, que se
-        comporta igual en todas.
+        versiones de Flet; el aviso se dibuja como un Text aparte.
         """
         txt = ft.TextField(
             label="Correo",
@@ -447,8 +532,7 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             prefix_icon=getattr(ft.icons, "ALTERNATE_EMAIL", None),
         )
 
-        # Estas dos propiedades no existen en todas las versiones de Flet,
-        # así que se asignan sólo si la versión instalada las soporta.
+        # Estas dos propiedades no existen en todas las versiones de Flet.
         try:
             txt.capitalization = ft.TextCapitalization.NONE
         except Exception:
@@ -458,48 +542,37 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         except Exception:
             pass
 
-        AYUDA_BASE = "Dominios aceptados: gmail, hotmail, outlook o yahoo (.com)"
-
         lbl_ayuda = ft.Text(AYUDA_BASE, size=11, color="#6B7280")
 
-        def revisar(e=None, silencioso: bool = False):
-            # Limpieza en vivo: sin espacios y siempre en minúsculas.
+        def limpiar_en_vivo(e=None):
+            # Sin espacios y siempre en minúsculas.
             crudo = txt.value or ""
             limpio = crudo.replace(" ", "").lower()
             if limpio != crudo:
                 txt.value = limpio
-
-            if not limpio:
+            # Al escribir se borra el error anterior: no tiene sentido
+            # dejarlo en rojo mientras el usuario lo está corrigiendo.
+            if txt.error_text:
                 txt.error_text = None
-                lbl_ayuda.value = AYUDA_BASE
-                lbl_ayuda.color = "#6B7280"
-            else:
+            try:
+                txt.update()
+            except Exception:
+                pass
+
+        def revisar_al_salir(e=None):
+            limpio = (txt.value or "").replace(" ", "").lower()
+            txt.value = limpio
+            if limpio:
                 ok_c, msg, _ = validar_correo(limpio)
-                if ok_c:
-                    txt.error_text = None
-                    lbl_ayuda.value = "Correo válido"
-                    lbl_ayuda.color = "#16A34A"
-                elif silencioso:
-                    # Mientras escribe no se le marca en rojo: sólo se le
-                    # recuerda el formato esperado.
-                    txt.error_text = None
-                    lbl_ayuda.value = "Formato esperado: usuario@gmail.com"
-                    lbl_ayuda.color = "#6B7280"
-                else:
-                    txt.error_text = msg
-                    lbl_ayuda.value = AYUDA_BASE
-                    lbl_ayuda.color = "#DC2626"
+                txt.error_text = None if ok_c else msg
+            else:
+                txt.error_text = None
+            try:
+                txt.update()
+            except Exception:
+                pass
 
-            for control in (txt, lbl_ayuda):
-                try:
-                    control.update()
-                except Exception:
-                    pass
-
-        txt.on_change = lambda e: revisar(e, silencioso=True)
-        txt.on_blur = lambda e: revisar(e, silencioso=False)
-
-        def usar_dominio(dominio: str):
+        def usar_dominio(dominio):
             def _click(e=None):
                 base = (txt.value or "").replace(" ", "").lower()
                 usuario_correo = base.split("@")[0]
@@ -511,24 +584,61 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                         pass
                     return
                 txt.value = f"{usuario_correo}@{dominio}"
-                revisar(silencioso=False)
+                revisar_al_salir()
+                actualizar_aviso()
             return _click
 
+        def actualizar_aviso(e=None):
+            limpio = (txt.value or "").replace(" ", "").lower()
+            if limpio and validar_correo(limpio)[0]:
+                lbl_ayuda.value = "Correo válido"
+                lbl_ayuda.color = "#16A34A"
+            else:
+                lbl_ayuda.value = AYUDA_BASE
+                lbl_ayuda.color = "#6B7280"
+            try:
+                lbl_ayuda.update()
+            except Exception:
+                pass
+
+        # El aviso va pegado al campo, arriba de los botones, para que se
+        # lea junto a la etiqueta "Correo".
         bloque_ayuda = ft.Column(
             controls=[
+                lbl_ayuda,
                 ft.Row(
                     controls=[
-                        ft.TextButton(f"@{d}", on_click=usar_dominio(d))
+                        ft.TextButton(
+                            content=ft.Text(f"@{d}", size=12, no_wrap=True),
+                            on_click=usar_dominio(d),
+                            style=ft.ButtonStyle(
+                                padding=_relleno_boton(),
+                                shape=ft.RoundedRectangleBorder(radius=8),
+                            ),
+                        )
                         for d in DOMINIOS_PERMITIDOS
                     ],
                     spacing=2,
+                    run_spacing=0,
                     wrap=True,
                 ),
-                lbl_ayuda,
             ],
-            spacing=2,
+            spacing=4,
             tight=True,
         )
+
+        def al_escribir(e=None):
+            limpiar_en_vivo(e)
+            actualizar_aviso(e)
+
+        def al_salir(e=None):
+            revisar_al_salir(e)
+            actualizar_aviso(e)
+
+        txt.on_change = al_escribir
+        txt.on_blur = al_salir
+
+        actualizar_aviso()
 
         return txt, bloque_ayuda
 
@@ -553,6 +663,14 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         dlg = ft.AlertDialog(title=ft.Text("Nuevo empleado"), modal=True)
 
         def guardar(ev):
+            # El orden importa. Antes, la comprobación de duplicados
+            # (que abre una conexión a la base en la nube) iba mezclada
+            # con la validación de formato. Si esa consulta fallaba o
+            # tardaba, la excepción se llevaba por delante todo el
+            # handler y NINGÚN error llegaba a pintarse: pulsar Guardar
+            # parecía no hacer nada. Ahora el formato se valida primero,
+            # sin tocar la base, y la base sólo se consulta si el
+            # formato ya está limpio.
             nombre   = _limpiar(txt_nombre.value)
             apellido = _limpiar(txt_apellido.value)
             telefono = _limpiar(txt_telefono.value)
@@ -560,62 +678,72 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             usuario  = _limpiar(txt_usuario.value)
             password = _limpiar(txt_pass.value)
 
-            for f in [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass]:
+            campos = [txt_nombre, txt_apellido, txt_telefono,
+                      txt_correo, txt_usuario, txt_pass]
+            for f in campos:
                 f.error_text = None
 
+            # --- Fase 1: formato (sin base de datos) ---
             ok = True
 
-            # Nombre
             ok_n, msg, nombre = validar_nombre(nombre, "Nombre", 30)
             if not ok_n:
                 txt_nombre.error_text = msg
                 ok = False
 
-            # Apellido
             ok_a, msg, apellido = validar_nombre(apellido, "Apellido", 30)
             if not ok_a:
                 txt_apellido.error_text = msg
                 ok = False
 
-            # Teléfono
             ok_t, msg, telefono = validar_telefono(telefono, 10)
             if not ok_t:
                 txt_telefono.error_text = msg
                 ok = False
-            else:
-                existe, msg_dup = db_existe_dato_persona("Telefono", telefono)
-                if existe:
-                    txt_telefono.error_text = msg_dup
-                    ok = False
 
-            # Correo
             ok_c, msg, correo = validar_correo(correo)
             if not ok_c:
                 txt_correo.error_text = msg
                 ok = False
-            else:
-                existe, msg_dup = db_existe_dato_persona("Correo", correo)
-                if existe:
-                    txt_correo.error_text = msg_dup
-                    ok = False
 
-            # Usuario
             ok_u, msg, usuario = validar_usuario(usuario, 20)
             if not ok_u:
                 txt_usuario.error_text = msg
                 ok = False
-            elif db_existe_usuario(usuario):
-                txt_usuario.error_text = "Ese usuario ya existe"
-                ok = False
 
-            # Contraseña (obligatoria al crear)
             ok_p, msg, password = validar_password(password, obligatorio=True)
             if not ok_p:
                 txt_pass.error_text = msg
                 ok = False
 
-            page.update()
             if not ok:
+                _refrescar_campos(campos, dlg)
+                _avisar_errores(campos)
+                return
+
+            # --- Fase 2: duplicados (sí toca la base de datos) ---
+            try:
+                existe, msg_dup = db_existe_dato_persona("Telefono", telefono)
+                if existe:
+                    txt_telefono.error_text = msg_dup
+                    ok = False
+
+                existe, msg_dup = db_existe_dato_persona("Correo", correo)
+                if existe:
+                    txt_correo.error_text = msg_dup
+                    ok = False
+
+                if db_existe_usuario(usuario):
+                    txt_usuario.error_text = "Ese usuario ya existe"
+                    ok = False
+            except Exception as ex:
+                _refrescar_campos(campos, dlg)
+                show_snack(f"No se pudo verificar duplicados: {ex}", ok=False)
+                return
+
+            if not ok:
+                _refrescar_campos(campos, dlg)
+                _avisar_errores(campos)
                 return
 
             try:
@@ -645,7 +773,7 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
-            ft.ElevatedButton("Guardar", bgcolor="#C86DD7", color="white", on_click=guardar),
+            ft.ElevatedButton("Guardar", bgcolor="#C86DD7", color="white", on_click=_seguro(guardar)),
         ]
         dlg.actions_alignment = ft.MainAxisAlignment.END
         open_dialog(dlg)
@@ -679,6 +807,9 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         )
 
         def guardar(ev):
+            # Mismo criterio que en el alta: primero el formato, sin
+            # tocar la base; los duplicados después y protegidos, para
+            # que un fallo de conexión no impida ver los errores.
             nombre   = _limpiar(txt_nombre.value)
             apellido = _limpiar(txt_apellido.value)
             telefono = _limpiar(txt_telefono.value)
@@ -686,72 +817,84 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             usuario  = _limpiar(txt_usuario.value)
             password = _limpiar(txt_pass.value)
 
-            for f in [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass]:
+            campos = [txt_nombre, txt_apellido, txt_telefono,
+                      txt_correo, txt_usuario, txt_pass]
+            for f in campos:
                 f.error_text = None
 
+            # --- Fase 1: formato (sin base de datos) ---
             ok = True
 
-            # Nombre
             ok_n, msg, nombre = validar_nombre(nombre, "Nombre", 30)
             if not ok_n:
                 txt_nombre.error_text = msg
                 ok = False
 
-            # Apellido
             ok_a, msg, apellido = validar_nombre(apellido, "Apellido", 30)
             if not ok_a:
                 txt_apellido.error_text = msg
                 ok = False
 
-            # Teléfono (excluye el propio empleado)
             ok_t, msg, telefono = validar_telefono(telefono, 10)
             if not ok_t:
                 txt_telefono.error_text = msg
                 ok = False
-            else:
-                existe, msg_dup = db_existe_dato_persona(
-                    "Telefono", telefono, "empleado", empleado.get("IdEmpleado")
-                )
-                if existe:
-                    txt_telefono.error_text = msg_dup
-                    ok = False
 
-            # Correo (excluye el propio empleado)
             ok_c, msg, correo = validar_correo(correo)
             if not ok_c:
                 txt_correo.error_text = msg
                 ok = False
-            else:
-                existe, msg_dup = db_existe_dato_persona(
-                    "Correo", correo, "empleado", empleado.get("IdEmpleado")
-                )
-                if existe:
-                    txt_correo.error_text = msg_dup
-                    ok = False
 
-            # Usuario (excluye el propio IdUsuario)
-            usuario_id = empleado.get("Usuario_IdUsuario")
             ok_u, msg, usuario = validar_usuario(usuario, 20)
             if not ok_u:
                 txt_usuario.error_text = msg
                 ok = False
-            elif db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
-                txt_usuario.error_text = "Ese usuario ya existe"
-                ok = False
 
-            # Contraseña (opcional en edición)
+            # La contraseña es opcional al editar.
             ok_p, msg, password = validar_password(password, obligatorio=False)
             if not ok_p:
                 txt_pass.error_text = msg
                 ok = False
 
-            page.update()
             if not ok:
+                _refrescar_campos(campos, dlg)
+                _avisar_errores(campos)
+                return
+
+            # --- Fase 2: duplicados, excluyendo el propio registro ---
+            id_empleado = empleado.get("IdEmpleado")
+            usuario_id  = empleado.get("Usuario_IdUsuario")
+            try:
+                existe, msg_dup = db_existe_dato_persona(
+                    "Telefono", telefono, "empleado", id_empleado
+                )
+                if existe:
+                    txt_telefono.error_text = msg_dup
+                    ok = False
+
+                existe, msg_dup = db_existe_dato_persona(
+                    "Correo", correo, "empleado", id_empleado
+                )
+                if existe:
+                    txt_correo.error_text = msg_dup
+                    ok = False
+
+                if db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
+                    txt_usuario.error_text = "Ese usuario ya existe"
+                    ok = False
+            except Exception as ex:
+                _refrescar_campos(campos, dlg)
+                show_snack(f"No se pudo verificar duplicados: {ex}", ok=False)
+                return
+
+            if not ok:
+                _refrescar_campos(campos, dlg)
+                _avisar_errores(campos)
                 return
 
             try:
                 db_editar_empleado(
-                    id_empleado=empleado.get("IdEmpleado"),
+                    id_empleado=id_empleado,
                     nombre=nombre,
                     apellido=apellido,
                     telefono=telefono,
@@ -784,7 +927,7 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
-            ft.ElevatedButton("Guardar cambios", bgcolor="#C86DD7", color="white", on_click=guardar),
+            ft.ElevatedButton("Guardar cambios", bgcolor="#C86DD7", color="white", on_click=_seguro(guardar)),
         ]
         dlg.actions_alignment = ft.MainAxisAlignment.END
         open_dialog(dlg)
@@ -822,33 +965,71 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
     # ----------------------------------------------------------------
     # Layout
     # ----------------------------------------------------------------
-    header = ft.Row(
+    # El encabezado era un solo Row: título + buscador (expand) + botón.
+    # En un celular el Row se desbordaba, el botón quedaba aplastado a
+    # unos pocos píxeles fuera de la pantalla y su texto se partía letra
+    # por letra, así que no había forma de pulsarlo. Con ResponsiveRow se
+    # apila solo: en escritorio va todo en una línea, en móvil el
+    # buscador y el botón ocupan el ancho completo.
+    header = ft.ResponsiveRow(
         controls=[
-            ft.Text("Control de empleados", size=22, weight="bold", color="#C86DD7"),
-            ft.Container(expand=True),
-            txt_buscar,
-            ft.ElevatedButton(
-                "+ Nuevo empleado",
-                bgcolor="#C86DD7",
-                color="white",
-                on_click=abrir_dialogo_nuevo,
-                style=ft.ButtonStyle(
-                    shape=ft.RoundedRectangleBorder(radius=20),
-                    padding=18,
+            ft.Container(
+                col={"xs": 12, "md": 5},
+                content=ft.Text(
+                    "Control de empleados",
+                    size=22,
+                    weight="bold",
+                    color="#C86DD7",
+                    max_lines=2,
+                    overflow=ft.TextOverflow.ELLIPSIS,
+                ),
+            ),
+            ft.Container(col={"xs": 12, "md": 4}, content=txt_buscar),
+            ft.Container(
+                col={"xs": 12, "md": 3},
+                content=ft.Column(
+                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                    tight=True,
+                    controls=[
+                        ft.ElevatedButton(
+                            content=ft.Text(
+                                "+ Nuevo empleado",
+                                size=14,
+                                weight="bold",
+                                no_wrap=True,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                            bgcolor="#C86DD7",
+                            color="white",
+                            on_click=abrir_dialogo_nuevo,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=20),
+                                padding=16,
+                            ),
+                        ),
+                    ],
                 ),
             ),
         ],
-        alignment=ft.MainAxisAlignment.CENTER,
+        run_spacing=10,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
-    content = ft.Container(
+    # El sidebar y el contenido eran hermanos dentro de un Row, así que
+    # al desplegarse le quitaba el ancho al contenido: el título se
+    # cortaba, el buscador partía su etiqueta letra por letra y las
+    # tarjetas quedaban aplastadas. Dentro de un Stack el sidebar se
+    # monta ENCIMA, como cualquier menú lateral de celular, y el
+    # contenido conserva su ancho completo. El padding izquierdo deja
+    # libre el riel plegado para que no tape nada.
+    ANCHO_RIEL = 78
+
+    cuerpo = ft.Container(
         expand=True,
         bgcolor="#F9F6FB",
-        padding=20,
+        padding=_relleno_contenido(ANCHO_RIEL),
         content=ft.Row(
             controls=[
-                sidebar,
-                ft.Container(width=20),
                 ft.Container(
                     expand=True,
                     content=ft.Column(
@@ -870,6 +1051,16 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                 ),
             ]
         ),
+    )
+
+    content = ft.Stack(
+        expand=True,
+        controls=[
+            cuerpo,
+            # top/bottom/left anclan el sidebar al costado y lo estiran
+            # a todo el alto disponible del Stack.
+            ft.Container(content=sidebar, top=0, bottom=0, left=0),
+        ],
     )
 
     appbar = ft.AppBar(

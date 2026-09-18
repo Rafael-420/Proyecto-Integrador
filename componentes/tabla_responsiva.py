@@ -164,6 +164,7 @@ class TablaResponsiva:
 
         self.filas: list = []
         self._expandidas: set = set()
+        self._modo_dibujado = None
 
         self.tabla = ft.DataTable(
             columns=[ft.DataColumn(ft.Text(c.titulo)) for c in columnas]
@@ -205,8 +206,14 @@ class TablaResponsiva:
                     anterior(e)
                 except Exception:
                     pass
+            # Sólo se redibuja si de verdad cambió el modo. En el
+            # navegador del celular, on_resized se dispara decenas de
+            # veces al ocultarse la barra de direcciones o al aparecer el
+            # teclado; reconstruir la lista en cada uno saturaba el
+            # websocket de Flet con actualizaciones inútiles.
             try:
-                self._render()
+                if self._modo_actual() != self._modo_dibujado:
+                    self._render()
             except Exception:
                 pass
 
@@ -229,8 +236,14 @@ class TablaResponsiva:
     # ------------------------------------------------------------------
     # Construcción de la vista
     # ------------------------------------------------------------------
+    def _modo_actual(self) -> str:
+        if not self.filas:
+            return "vacio"
+        return "movil" if self.es_movil() else "escritorio"
+
     def _render(self):
         movil = self.es_movil()
+        self._modo_dibujado = self._modo_actual()
 
         # La tabla vive sobre una superficie blanca; las tarjetas ya son
         # blancas, así que en móvil el fondo se deja transparente para
@@ -260,12 +273,24 @@ class TablaResponsiva:
                 expand=True,
             )
 
-        for control in (self.control, self.page):
-            try:
-                control.update()
-                break
-            except Exception:
-                continue
+        # Si el contenedor todavía no está montado en la página, no se
+        # manda nada: un update() sobre un control sin montar termina
+        # disparando un page.update() completo contra un websocket que
+        # puede estar cerrándose.
+        try:
+            # En Flet 0.8x, leer .page en un control sin montar lanza
+            # RuntimeError en vez de devolver None.
+            montado = self.control.page is not None
+        except Exception:
+            montado = False
+
+        if not montado:
+            return
+
+        try:
+            self.control.update()
+        except Exception:
+            pass
 
     def _vista_vacia(self):
         return ft.Container(
@@ -442,8 +467,9 @@ class TablaResponsiva:
                                 size=13,
                                 color=COLOR_TEXTO,
                                 text_align=ft.TextAlign.RIGHT,
-                                max_lines=1,
+                                max_lines=2,
                                 overflow=ft.TextOverflow.ELLIPSIS,
+                                selectable=True,
                                 expand=True,
                             ),
                         ],
@@ -470,24 +496,55 @@ class TablaResponsiva:
                         a.on_click(f)
 
                     color = COLOR_PELIGRO if accion.peligrosa else COLOR_LILA
+
+                    # El contenido se arma a mano en vez de usar text= e
+                    # icon=: así la etiqueta se puede forzar a una sola
+                    # línea. Con el botón estrecho, "Eliminar" se partía
+                    # en dos renglones ("Elimina" / "r").
+                    etiqueta = ft.Text(
+                        accion.texto,
+                        size=13,
+                        color=color,
+                        max_lines=1,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                        text_align=ft.TextAlign.CENTER,
+                    )
+                    try:
+                        etiqueta.no_wrap = True
+                    except Exception:
+                        pass
+
+                    partes = []
+                    if accion.icono:
+                        partes.append(ft.Icon(_icono(accion.icono), size=16, color=color))
+                    partes.append(etiqueta)
+
                     botones.append(
                         ft.OutlinedButton(
-                            accion.texto,
-                            icon=_icono(accion.icono) if accion.icono else None,
+                            content=ft.Row(
+                                partes,
+                                spacing=6,
+                                tight=True,
+                                alignment=ft.MainAxisAlignment.CENTER,
+                            ),
                             on_click=click,
-                            expand=True,
                             style=ft.ButtonStyle(
                                 color=color,
                                 side=ft.BorderSide(1, color),
                                 shape=ft.RoundedRectangleBorder(radius=10),
-                                padding=14,
+                                padding=_relleno(left=6, right=6, top=12, bottom=12),
                             ),
                         )
                     )
                 contenido.append(
                     ft.Container(
                         margin=_margen(top=10),
-                        content=ft.Row(botones, spacing=8),
+                        content=ft.Column(
+                            botones,
+                            spacing=8,
+                            tight=True,
+                            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                        ),
                     )
                 )
 

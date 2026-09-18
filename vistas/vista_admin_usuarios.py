@@ -1,5 +1,7 @@
 import flet as ft
 from configuracion.base_datos import get_connection
+from configuracion.variables import ROL_CLIENTE
+from servicios import servicio_seguridad as seguridad
 from componentes.sidebar_admin import build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
 
@@ -163,9 +165,10 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             conn.start_transaction()
             cur = conn.cursor()
 
+            # La contrasena se guarda hasheada con PBKDF2-SHA256 + sal.
             cur.execute(
-                "INSERT INTO usuario (NombreUsuario, Contraseña) VALUES (%s, %s)",
-                (usuario, password),
+                "INSERT INTO usuario (NombreUsuario, Contraseña, Rol) VALUES (%s, %s, %s)",
+                (usuario, seguridad.hashear(password), ROL_CLIENTE),
             )
             id_usuario = cur.lastrowid
 
@@ -216,7 +219,7 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
                     SET NombreUsuario=%s, Contraseña=%s
                     WHERE IdUsuario=%s
                     """,
-                    (nombre_usuario, password, id_usuario),
+                    (nombre_usuario, seguridad.hashear(password), id_usuario),
                 )
             else:
                 cur.execute(
@@ -430,8 +433,9 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             elif db_existe_usuario(usuario):
                 txt_usuario.error_text = "Ese usuario ya existe"
                 ok = False
-            if not password or len(password) < 4:
-                txt_pass.error_text = "Mínimo 4 caracteres"
+            politica = seguridad.validar_fortaleza(password, usuario)
+            if not politica.valida:
+                txt_pass.error_text = politica.mensaje
                 ok = False
 
             page.update()
@@ -523,9 +527,11 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
                 txt_usuario.error_text = "Ese usuario ya existe"
                 ok = False
 
-            if password and len(password) < 4:
-                txt_pass.error_text = "Mínimo 4 caracteres"
-                ok = False
+            if password:
+                politica = seguridad.validar_fortaleza(password, usuario)
+                if not politica.valida:
+                    txt_pass.error_text = politica.mensaje
+                    ok = False
 
             page.update()
 

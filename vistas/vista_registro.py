@@ -6,6 +6,8 @@ if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
 
 from configuracion.base_datos import get_connection
+from configuracion.variables import ROL_CLIENTE, ROL_EMPLEADO
+from servicios import servicio_seguridad as seguridad
 
 # -------------------------------------------------------------------
 # HELPERS DE BD  (verificación cruzada empleado + cliente)
@@ -172,9 +174,10 @@ def RegistroView(page: ft.Page, tipo: str):
             valido = False
         # la comprobación de usuario duplicado se hace en registrar() justo antes del INSERT
 
-        # --- Contraseña
-        if len(password) < 6:
-            txt_pass.error_text = "La contraseña debe tener mínimo 6 caracteres"
+        # --- Contraseña (politica central de servicio_seguridad)
+        politica = seguridad.validar_fortaleza(password, usuario)
+        if not politica.valida:
+            txt_pass.error_text = politica.mensaje
             valido = False
 
         # --- Confirmación
@@ -221,9 +224,12 @@ def RegistroView(page: ft.Page, tipo: str):
                 return
 
             # Insertar en usuario
+            # La contrasena NUNCA se guarda tal cual: se almacena su hash
+            # PBKDF2-SHA256 con sal, generado por servicio_seguridad.
+            rol = ROL_CLIENTE if tipo == "Cliente" else ROL_EMPLEADO
             cursor.execute(
-                "INSERT INTO usuario (NombreUsuario, Contraseña) VALUES (%s, %s)",
-                (usuario, password),
+                "INSERT INTO usuario (NombreUsuario, Contraseña, Rol) VALUES (%s, %s, %s)",
+                (usuario, seguridad.hashear(password), rol),
             )
             id_usuario = cursor.lastrowid
 

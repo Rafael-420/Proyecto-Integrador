@@ -1,8 +1,8 @@
 import flet as ft
-import hashlib
 import re
 
 from configuracion.base_datos import get_connection
+from servicios import servicio_seguridad as seguridad
 from validaciones.validacion_personas import (
     validar_nombre,
     validar_telefono,
@@ -136,7 +136,7 @@ def _actualizar_password_cliente(usuario_id, nueva_password):
         cur = conn.cursor()
         cur.execute(
             "UPDATE usuario SET Contraseña=%s WHERE IdUsuario=%s",
-            (nueva_password, int(usuario_id)),
+            (seguridad.hashear(str(nueva_password)), int(usuario_id)),
         )
         conn.commit()
     except Exception:
@@ -200,8 +200,7 @@ def _password_actual_correcta(usuario_id, password_actual: str) -> bool:
             return False
         guardada = str(row.get("Contraseña") or "")
         password_actual = str(password_actual or "").strip()
-        password_hash = hashlib.sha256(password_actual.encode("utf-8")).hexdigest()
-        return guardada == password_actual or guardada == password_hash
+        return seguridad.verificar(password_actual, guardada).valida
     finally:
         try:
             if cur:

@@ -1,7 +1,6 @@
 import os
 import smtplib
 import ssl
-import hashlib
 import secrets
 import string
 from email.message import EmailMessage
@@ -9,6 +8,7 @@ from email.message import EmailMessage
 import flet as ft
 from componentes.sidebar_admin import build_admin_sidebar
 from configuracion.base_datos import get_connection
+from servicios import servicio_seguridad as seguridad
 
 # ---------------------------------------------------
 # Compatibilidad Flet
@@ -107,12 +107,17 @@ def _show_snack(page: ft.Page, texto: str, ok: bool = True):
 
 
 def _generar_password_temporal(longitud: int = 10) -> str:
+    """Genera una contrasena temporal que cumple la politica del sistema."""
     caracteres = string.ascii_letters + string.digits
-    return "CB-" + "".join(secrets.choice(caracteres) for _ in range(longitud))
+    while True:
+        candidata = "CB-" + "".join(secrets.choice(caracteres) for _ in range(longitud))
+        if seguridad.validar_fortaleza(candidata).valida:
+            return candidata
 
 
 def _hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    """PBKDF2-SHA256 con sal aleatoria (antes era SHA-256 sin sal)."""
+    return seguridad.hashear(password)
 
 
 def _enviar_correo_temporal(destinatario: str, nombre_usuario: str, password_temporal: str):
@@ -248,7 +253,8 @@ def admin_view(page: ft.Page, nombre: str = "Administrador") -> ft.View:
             cur.execute(
                 """
                 UPDATE usuario
-                SET Contraseña=%s
+                SET Contraseña=%s,
+                    RequiereCambio=1
                 WHERE IdUsuario=%s
                 """,
                 (password_hash, id_usuario),
