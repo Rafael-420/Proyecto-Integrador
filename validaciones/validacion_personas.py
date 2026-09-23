@@ -2,6 +2,8 @@
 
 import re
 
+from servicios.servicio_seguridad import validar_fortaleza
+
 RE_NOMBRE   = re.compile(r"^[A-Za-zÁÉÍÓÚáéíóúÑñÜü ]{2,}$")
 RE_CORREO   = re.compile(r"^[\w\.-]+@(gmail|hotmail|outlook|yahoo)\.com$")
 RE_USUARIO  = re.compile(r"^[A-Za-z0-9_]{4,}$")
@@ -69,11 +71,20 @@ def validar_usuario(valor: str, max_len: int = 20) -> tuple:
     return True, None, texto
 
 
-def validar_password(valor: str, obligatorio: bool = True) -> tuple:
-    """Mínimo 6 caracteres cuando es obligatorio."""
+def validar_password(valor: str, obligatorio: bool = True, nombre_usuario: str = "") -> tuple:
+    """Aplica la misma política de contraseñas que el resto del sistema.
+
+    Delega en servicio_seguridad.validar_fortaleza para que el formulario
+    no acepte contraseñas que después el sistema rechazaría (defecto D-01).
+
+    Cuando obligatorio es False, dejar el campo vacío significa "no
+    cambiar la contraseña" y se acepta.
+    """
     texto = str(valor or "").strip()
     if not texto and not obligatorio:
         return True, None, None
-    if len(texto) < 6:
-        return False, "La contraseña debe tener mínimo 6 caracteres", texto
+
+    resultado = validar_fortaleza(texto, nombre_usuario)
+    if not resultado.valida:
+        return False, resultado.mensaje, texto
     return True, None, texto

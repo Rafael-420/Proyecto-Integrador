@@ -139,6 +139,11 @@ def editar_bebida(id_bebida: int, nombre: str, precio: float, descripcion: str, 
 
 
 def guardar_imagen_bebida(id_bebida: int, ruta_relativa: str):
+    """Guarda la ruta de la foto de la bebida.
+
+    Propaga el error si no se pudo guardar (defecto D-10): antes se
+    descartaba en silencio y el admin creia que la foto habia quedado.
+    """
     conn = None
     cur = None
     try:
@@ -152,6 +157,7 @@ def guardar_imagen_bebida(id_bebida: int, ruta_relativa: str):
     except Exception:
         if conn:
             conn.rollback()
+        raise
     finally:
         _cerrar_conexion(conn, cur)
 
@@ -161,6 +167,10 @@ def marcar_disponibilidad(id_bebida: int, disponible: bool):
 
     No se borra: sigue existiendo para historial/reportes, solo deja de
     aparecer en el menú del cliente mientras esté agotada.
+
+    Propaga el error si no se pudo marcar (defecto D-10): antes se
+    descartaba en silencio y la bebida seguía apareciendo en el menú
+    aunque el admin la hubiera marcado como agotada.
     """
     conn = None
     cur = None
@@ -175,6 +185,7 @@ def marcar_disponibilidad(id_bebida: int, disponible: bool):
     except Exception:
         if conn:
             conn.rollback()
+        raise
     finally:
         _cerrar_conexion(conn, cur)
 

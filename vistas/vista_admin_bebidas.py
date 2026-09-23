@@ -217,7 +217,11 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
 
     def alternar_disponibilidad(b: dict):
         nuevo_valor = not bool(b.get("Disponible"))
-        marcar_disponibilidad(b.get("IdBebida"), nuevo_valor)
+        try:
+            marcar_disponibilidad(b.get("IdBebida"), nuevo_valor)
+        except Exception as ex:
+            _show_snack(page, f"No se pudo actualizar la disponibilidad: {ex}", ok=False)
+            return
         _show_snack(page, f"{b.get('Nombre')} marcada como {'disponible' if nuevo_valor else 'agotada'}.")
         recargar()
 

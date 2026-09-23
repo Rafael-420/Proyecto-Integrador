@@ -1,6 +1,25 @@
 from datetime import datetime, date
 from configuracion.base_datos import get_connection
 
+
+def _cerrar_conexion(conn, cur):
+    """Cierra cursor y conexión de forma segura.
+
+    Con el pool de base_datos.py, una conexión que no se cierra no
+    regresa al pool y termina agotándolo (defecto D-07).
+    """
+    try:
+        if cur:
+            cur.close()
+    except Exception:
+        pass
+    try:
+        if conn:
+            conn.close()
+    except Exception:
+        pass
+
+
 def abrir_corte(id_empleado: int) -> int:
     now = datetime.now()
     cols = _cortecaja_cols()
@@ -19,44 +38,56 @@ def abrir_corte(id_empleado: int) -> int:
     col_dfin = _pick(cols, ["DineroFinalizar"])
     col_tiempo = _pick(cols, ["TiempoTrascurrido"])
 
-    conn = get_connection()
-    cur = conn.cursor()
+    conn = None
+    cur = None
 
-    sql = f"""
-    INSERT INTO cortecaja
-    ({col_h_ini}, {col_h_fin}, {col_f_ini}, {col_dinero}, {col_ing}, {col_egr},
-     {col_plat}, {col_dfin}, {col_tiempo}, {col_f_fin}, {col_admin})
-    VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-    """
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
 
-    cur.execute(
-        sql,
-        (
-            now.strftime("%H:%M:%S"),
-            "00:00",                  # corte abierto
-            now.strftime("%Y-%m-%d"), # varchar o date, MySQL lo acepta
-            0.0, 0.0, 0.0,
-            0, 0.0, 0,
-            date.today(),
-            int(id_empleado),
-        ),
-    )
+        sql = f"""
+        INSERT INTO cortecaja
+        ({col_h_ini}, {col_h_fin}, {col_f_ini}, {col_dinero}, {col_ing}, {col_egr},
+         {col_plat}, {col_dfin}, {col_tiempo}, {col_f_fin}, {col_admin})
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        """
 
-    conn.commit()
-    cid = cur.lastrowid
-    cur.close()
-    conn.close()
-    return int(cid)
+        cur.execute(
+            sql,
+            (
+                now.strftime("%H:%M:%S"),
+                "00:00",                  # corte abierto
+                now.strftime("%Y-%m-%d"), # varchar o date, MySQL lo acepta
+                0.0, 0.0, 0.0,
+                0, 0.0, 0,
+                date.today(),
+                int(id_empleado),
+            ),
+        )
+
+        conn.commit()
+        cid = cur.lastrowid
+        return int(cid)
+
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        _cerrar_conexion(conn, cur)
 
 
 def _cortecaja_cols():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SHOW COLUMNS FROM cortecaja")
-    cols = {r[0] for r in cur.fetchall()}
-    cur.close()
-    conn.close()
-    return cols
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SHOW COLUMNS FROM cortecaja")
+        return {r[0] for r in cur.fetchall()}
+    finally:
+        _cerrar_conexion(conn, cur)
+
 
 def _pick(cols, candidates):
     for c in candidates:
@@ -66,73 +97,74 @@ def _pick(cols, candidates):
 
 
 def obtener_info_corte(corte_id: int):
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
-    cur.execute(
-        """
-        SELECT idCorteCaja, Hora_Inicio, Hora_Terminar, Fecha_Inicio, DineroEnCaja,
-               IngresoDia, EgresoDIa, PlatillosVendidos, DineroFinalizar, TiempoTrascurrido,
-               FechaFinalizar, Administrador_idAdministrador
-        FROM cortecaja
-        WHERE idCorteCaja=%s
-        """,
-        (corte_id,),
-    )
-    row = cur.fetchone()
-    cur.close()
-    conn.close()
-    return row
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute(
+            """
+            SELECT idCorteCaja, Hora_Inicio, Hora_Terminar, Fecha_Inicio, DineroEnCaja,
+                   IngresoDia, EgresoDIa, PlatillosVendidos, DineroFinalizar, TiempoTrascurrido,
+                   FechaFinalizar, Administrador_idAdministrador
+            FROM cortecaja
+            WHERE idCorteCaja=%s
+            """,
+            (corte_id,),
+        )
+        return cur.fetchone()
+    finally:
+        _cerrar_conexion(conn, cur)
 
 
 def resumen_por_corte(corte_id: int):
     """
     Ingresos: sumatoria de detalleventas.Total por ventas.CorteCaja_idCorteCaja
-    Egresos: sumatoria de ingresos_egresos.Monto donde TipoMovimiento='Egreso' en la fecha del corte
-            (tu tabla ingresos_egresos NO tiene CorteCaja_idCorteCaja)
+    Egresos: sumatoria de ingresos_egresos.Monto donde TipoMovimiento='Egreso'
+            y CorteCaja_idCorteCaja corresponde a este corte.
+
+    Antes los egresos se sumaban por fecha (defecto D-08). Como abrir_corte()
+    se ejecuta en cada inicio de sesión, dos cortes del mismo día se cargaban
+    los mismos egresos. vista_caja_chica ya guarda cada movimiento con su
+    CorteCaja_idCorteCaja, así que el filtro correcto es por corte.
     """
-    info = obtener_info_corte(corte_id)
-    fecha = info["Fecha_Inicio"] if info else None  # varchar(10) 'YYYY-MM-DD'
+    conn = None
+    cur = None
 
-    conn = get_connection()
-    cur = conn.cursor(dictionary=True)
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
 
-    # Ingresos por ventas
-    cur.execute(
-        """
-        SELECT COALESCE(SUM(d.Total), 0) AS ingresos, COUNT(*) AS platillos
-        FROM ventas v
-        JOIN detalleventas d ON d.Ventas_IdVentas = v.IdVentas
-        WHERE v.CorteCaja_idCorteCaja = %s
-        """,
-        (corte_id,),
-    )
-    r1 = cur.fetchone() or {"ingresos": 0, "platillos": 0}
-    ingresos = float(r1["ingresos"] or 0)
-    platillos = int(r1["platillos"] or 0)
+        # Ingresos por ventas
+        cur.execute(
+            """
+            SELECT COALESCE(SUM(d.Total), 0) AS ingresos, COUNT(*) AS platillos
+            FROM ventas v
+            JOIN detalleventas d ON d.Ventas_IdVentas = v.IdVentas
+            WHERE v.CorteCaja_idCorteCaja = %s
+            """,
+            (corte_id,),
+        )
+        r1 = cur.fetchone() or {"ingresos": 0, "platillos": 0}
+        ingresos = float(r1["ingresos"] or 0)
+        platillos = int(r1["platillos"] or 0)
 
-    # Egresos por día (porque no hay corte_id en ingresos_egresos)
-    if fecha:
+        # Egresos del corte
         cur.execute(
             """
             SELECT COALESCE(SUM(Monto), 0) AS egresos, COUNT(*) AS movimientos
             FROM ingresos_egresos
-            WHERE LOWER(TipoMovimiento)='egreso' AND Fecha = %s
+            WHERE LOWER(TipoMovimiento)='egreso' AND CorteCaja_idCorteCaja = %s
             """,
-            (fecha,),
-        )
-    else:
-        cur.execute(
-            """
-            SELECT 0 AS egresos, 0 AS movimientos
-            """
+            (corte_id,),
         )
 
-    r2 = cur.fetchone() or {"egresos": 0, "movimientos": 0}
-    egresos = float(r2["egresos"] or 0)
-    movs = int(r2["movimientos"] or 0)
+        r2 = cur.fetchone() or {"egresos": 0, "movimientos": 0}
+        egresos = float(r2["egresos"] or 0)
+        movs = int(r2["movimientos"] or 0)
 
-    cur.close()
-    conn.close()
+    finally:
+        _cerrar_conexion(conn, cur)
 
     balance = ingresos - egresos
     return ingresos, egresos, balance, movs, platillos
@@ -163,31 +195,38 @@ def cerrar_corte(corte_id: int):
     dinero_en_caja = float(info.get("DineroEnCaja") or 0)
     dinero_final = dinero_en_caja + balance
 
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute(
-        """
-        UPDATE cortecaja
-        SET Hora_Terminar=%s,
-            FechaFinalizar=%s,
-            IngresoDia=%s,
-            EgresoDIa=%s,
-            PlatillosVendidos=%s,
-            DineroFinalizar=%s,
-            TiempoTrascurrido=%s
-        WHERE idCorteCaja=%s
-        """,
-        (
-            now.strftime("%H:%M:%S"),
-            now.date(),
-            ingresos,
-            egresos,
-            platillos,
-            dinero_final,
-            minutos,
-            corte_id,
-        ),
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE cortecaja
+            SET Hora_Terminar=%s,
+                FechaFinalizar=%s,
+                IngresoDia=%s,
+                EgresoDIa=%s,
+                PlatillosVendidos=%s,
+                DineroFinalizar=%s,
+                TiempoTrascurrido=%s
+            WHERE idCorteCaja=%s
+            """,
+            (
+                now.strftime("%H:%M:%S"),
+                now.date(),
+                ingresos,
+                egresos,
+                platillos,
+                dinero_final,
+                minutos,
+                corte_id,
+            ),
+        )
+        conn.commit()
+    except Exception:
+        if conn:
+            conn.rollback()
+        raise
+    finally:
+        _cerrar_conexion(conn, cur)
