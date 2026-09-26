@@ -19,6 +19,9 @@ from servicios.servicio_menu import (
     obtener_pedido_activo,
     obtener_bebidas,
     cancelar_pedido,
+    puede_pedir,
+    PedidoNoPermitido,
+    MAX_BEBIDAS_POR_PEDIDO,
 )
 from utilidades.formato import formatear_dinero
 
@@ -487,6 +490,27 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
     # --------------------------------------------------------
     # Funciones de cálculo
     # --------------------------------------------------------
+    # --------------------------------------------------------
+    # Reglas de pedidos para recoger
+    # --------------------------------------------------------
+    # El cliente queda bloqueado si dejó pedidos sin recoger (debe pasar
+    # a pagarlos al local) o si ya tiene un pedido en curso. Se consulta
+    # al entrar al carrito y antes de registrar, para no hacer una
+    # consulta por cada cambio del carrito.
+    bloqueo = {"mensaje": None, "motivo": None}
+
+    def refrescar_bloqueo():
+        if cliente_id is None:
+            bloqueo["mensaje"] = None
+            bloqueo["motivo"] = None
+            return
+        permitido, mensaje, detalles = puede_pedir(cliente_id)
+        bloqueo["mensaje"] = None if permitido else mensaje
+        bloqueo["motivo"] = detalles.get("motivo")
+
+    def icono_bloqueo() -> str:
+        return "💸" if bloqueo["motivo"] == "adeudo" else "⏳"
+
     def calcular_total() -> float:
         total = 0.0
         for item in carrito.values():
@@ -616,6 +640,15 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         nombre_prod = producto.get("nombre", "Producto")
         key = _cart_key(nombre_prod, preparacion)
 
+        if contar_carrito() >= MAX_BEBIDAS_POR_PEDIDO:
+            _show_snack(
+                page,
+                f"Máximo {MAX_BEBIDAS_POR_PEDIDO} bebidas por pedido. "
+                "Quita alguna del carrito si quieres cambiarla.",
+                ok=False,
+            )
+            return
+
         if key not in carrito:
             carrito[key] = {
                 "nombre": nombre_prod,
@@ -634,6 +667,11 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
     def build_carrito():
         carrito_list.controls.clear()
 
+        if bloqueo["mensaje"]:
+            carrito_list.controls.append(
+                tarjeta_mensaje(icono_bloqueo(), bloqueo["mensaje"])
+            )
+
         if not carrito:
             carrito_list.controls.append(
                 tarjeta_mensaje("🛒", "Tu carrito está vacío.")
@@ -643,6 +681,13 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         for key, item in list(carrito.items()):
 
             def sumar(e=None, k=key):
+                if contar_carrito() >= MAX_BEBIDAS_POR_PEDIDO:
+                    _show_snack(
+                        page,
+                        f"Máximo {MAX_BEBIDAS_POR_PEDIDO} bebidas por pedido.",
+                        ok=False,
+                    )
+                    return
                 if k in carrito:
                     carrito[k]["qty"] += 1
                 guardar_carrito()
@@ -697,6 +742,16 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
 
         if not carrito:
             _show_snack(page, "Tu carrito está vacío.", ok=False)
+            return
+
+        # Reglas de pedidos para recoger: adeudo por no recoger o pedido
+        # en curso. Se revisa aquí para avisar antes de pedirle el método
+        # de pago; insertar_pedido lo vuelve a validar.
+        refrescar_bloqueo()
+        if bloqueo["mensaje"]:
+            _show_snack(page, bloqueo["mensaje"], ok=False)
+            build_carrito()
+            refrescar_pagina()
             return
 
         # Antes el pedido se registraba directo, sin preguntar nada. Ahora
@@ -829,6 +884,13 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             actualizar_badge_notificaciones()
             set_tab("estado")
             page.update()
+        except PedidoNoPermitido as regla:
+            # No es un error del sistema: es una regla del negocio. El
+            # carrito se conserva para que el cliente no lo pierda.
+            _show_snack(page, regla.mensaje, ok=False)
+            refrescar_bloqueo()
+            build_carrito()
+            refrescar_pagina()
         except Exception as ex:
             _show_snack(page, f"Error al registrar pedido: {ex}", ok=False)
 
@@ -980,6 +1042,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             titulo_seccion.value = "Carrito"
             subtitulo_seccion.value = "Revisa tus bebidas antes de realizar el pedido."
             txt_search.visible = False
+            refrescar_bloqueo()
             build_carrito()
             main_switcher.content = carrito_list
 

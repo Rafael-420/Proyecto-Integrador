@@ -1,3 +1,5 @@
+import os
+
 import flet as ft
 from navegacion.router import Router
 from configuracion.variables import COLOR_FONDO
@@ -23,10 +25,16 @@ WEB_VIEW = (
     or getattr(ft, "WEB_BROWSER", None)
 )
 
+# Ruta absoluta de assets: con la ruta relativa, las imágenes (el vaso,
+# el hielo y la boba del menú) solo cargaban si la app se iniciaba
+# parada exactamente en la carpeta del proyecto. Desde cualquier otro
+# directorio Flet no encontraba la carpeta y no se veía ninguna imagen.
+CARPETA_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+
 ft.app(
     target=main,
     view=WEB_VIEW,
     host="0.0.0.0",
     port=8550,
-    assets_dir="assets",
+    assets_dir=CARPETA_ASSETS,
 )

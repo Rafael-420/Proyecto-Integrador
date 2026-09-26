@@ -284,6 +284,26 @@ def abrir_dialogo_personalizacion(
         -0.09, 0.15,
     ]
 
+    def _respaldo_dibujado(ruta: str, ancho_img: int, alto_img: int):
+        """Figura simple para cuando la imagen no carga.
+
+        Sin esto, si los PNG de assets/vaso no se sirven, la vista previa
+        queda como una mancha de color con unas barras sueltas (las ondas
+        del líquido, que sí son controles de color) y parece un error.
+        """
+        if ruta == RUTA_HIELO:
+            return ft.Container(
+                width=ancho_img, height=alto_img,
+                bgcolor="#DBEAFE", border_radius=6,
+                border=ft.border.all(1, "#93C5FD"),
+            )
+        if ruta == RUTA_BOBA:
+            return ft.Container(
+                width=ancho_img, height=alto_img,
+                bgcolor="#3B2314", border_radius=999,
+            )
+        return ft.Container()
+
     def _crear_flotante(ruta: str, ancho_img: int, alto_img: int, angulo: float = 0.0, escala: float = 1.0):
         return ft.Container(
             left=0,
@@ -295,7 +315,10 @@ def abrir_dialogo_personalizacion(
             rotate=ft.Rotate(angle=angulo),
             animate_position=ft.animation.Animation(420, ft.AnimationCurve.EASE_OUT),
             animate_opacity=ft.animation.Animation(280, ft.AnimationCurve.EASE_OUT),
-            content=ft.Image(src=ruta, width=ancho_img, height=alto_img, fit=ft.BoxFit.CONTAIN),
+            content=ft.Image(
+                src=ruta, width=ancho_img, height=alto_img, fit=ft.BoxFit.CONTAIN,
+                error_content=_respaldo_dibujado(ruta, ancho_img, alto_img),
+            ),
         )
 
     def _crear_onda():
@@ -311,7 +334,14 @@ def abrir_dialogo_personalizacion(
             animate_opacity=ft.animation.Animation(280, ft.AnimationCurve.EASE_OUT),
         )
 
-    imagen_vaso = ft.Image(src=RUTA_VASO, fit=ft.BoxFit.CONTAIN)
+    imagen_vaso = ft.Image(
+        src=RUTA_VASO,
+        fit=ft.BoxFit.CONTAIN,
+        error_content=ft.Container(
+            border_radius=ft.BorderRadius(top_left=10, top_right=10, bottom_left=40, bottom_right=40),
+            border=ft.border.all(2, "#E9A8D9"),
+        ),
+    )
 
     tinte_liquido = ft.Container(
         bgcolor="#FDF2F8",

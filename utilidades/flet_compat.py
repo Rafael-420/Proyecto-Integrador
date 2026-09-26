@@ -104,3 +104,64 @@ def snack(page: ft.Page, texto: str, ok: bool = True):
         bgcolor="#2E7D32" if ok else "#C62828",
     )
     abrir_dialogo(page, sb)
+
+# ------------------------------------------------------------
+# Mensajes de error en campos de formulario
+# ------------------------------------------------------------
+# Flet cambió el nombre de la propiedad: hasta 0.2x el TextField usaba
+# error_text (str) y en las versiones nuevas FormFieldControl usa error,
+# que acepta texto o un control. Usar el nombre viejo tumba la app con
+# "'TextField' object has no attribute 'error_text'".
+#
+# Estas funciones escriben y leen el error sin importar la versión, para
+# que las vistas no tengan que saber en cuál se está ejecutando.
+
+def _asignar(campo, atributo, valor) -> bool:
+    """Intenta asignar el atributo y confirma que quedó puesto."""
+    try:
+        setattr(campo, atributo, valor)
+    except Exception:
+        return False
+    try:
+        return getattr(campo, atributo, "sin valor") == valor
+    except Exception:
+        return False
+
+
+def set_error(campo, mensaje=None):
+    """Marca (o limpia, con mensaje None) el error de un campo.
+
+    No se usa hasattr para decidir: en las versiones nuevas de Flet el
+    control rechaza los atributos que no declara y hasattr no lo
+    anticipa, lo que tumbaba la app con "'TextField' object has no
+    attribute 'error_text'". Aquí se intenta asignar y se comprueba el
+    resultado, así funciona en cualquier versión.
+    """
+    if campo is None:
+        return
+
+    texto = mensaje if mensaje else None
+
+    # error_text primero: en Flet 0.28 las dos propiedades existen, pero
+    # la que realmente se dibuja bajo el campo es error_text. En las
+    # versiones nuevas asignarla falla y entonces se usa error.
+    for atributo in ("error_text", "error"):
+        if _asignar(campo, atributo, texto):
+            return
+
+    # Última opción: al menos que el mensaje se vea en algún lado.
+    try:
+        campo.helper_text = texto
+    except Exception:
+        pass
+
+
+def get_error(campo):
+    """Devuelve el mensaje de error del campo, o None si no tiene."""
+    if campo is None:
+        return None
+    for atributo in ("error_text", "error"):
+        valor = getattr(campo, atributo, None)
+        if valor:
+            return valor
+    return None

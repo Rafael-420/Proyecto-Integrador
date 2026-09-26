@@ -38,13 +38,22 @@ from servicios import servicio_menu as menu  # noqa: E402
 _GET_CONNECTION = "servicios.servicio_menu.get_connection"
 
 
+def _sql_con(cursor, fragmento):
+    """Consultas ejecutadas que contienen el fragmento dado."""
+    return [c.args for c in cursor.execute.call_args_list if fragmento in c.args[0]]
+
+
 def _conexion_simulada(fetchall=None, fetchone=None, lastrowid=None,
                        rowcount=0, error_execute=None):
     conexion = MagicMock(name="conexion")
     cursor = MagicMock(name="cursor")
     conexion.cursor.return_value = cursor
     cursor.fetchall.return_value = fetchall
-    cursor.fetchone.return_value = fetchone
+    if isinstance(fetchone, list):
+        # Varias consultas seguidas: una respuesta por llamada, en orden.
+        cursor.fetchone.side_effect = fetchone
+    else:
+        cursor.fetchone.return_value = fetchone
     cursor.lastrowid = lastrowid
     cursor.rowcount = rowcount
     if error_execute is not None:
@@ -193,7 +202,7 @@ class PruebasInsertarPedido(unittest.TestCase):
         pedido_id = self._insertar(conexion, cliente_id="12")
 
         self.assertEqual(pedido_id, 77)
-        sql, valores = cursor.execute.call_args_list[0].args
+        sql, valores = _sql_con(cursor, "INSERT INTO generarpedido")[0]
         self.assertIn("INSERT INTO generarpedido", sql)
         hora, fecha, producto, observaciones, total, mesa, estatus, id_estatus, cliente = valores
         self.assertIsInstance(hora, time)
@@ -210,7 +219,7 @@ class PruebasInsertarPedido(unittest.TestCase):
         conexion, cursor = _conexion_simulada(lastrowid=77)
         self._insertar(conexion)
 
-        hora = cursor.execute.call_args_list[0].args[1][0]
+        hora = _sql_con(cursor, "INSERT INTO generarpedido")[0][1][0]
         self.assertEqual(hora.microsecond, 0)
 
     def test_arma_las_observaciones(self):
@@ -225,15 +234,14 @@ class PruebasInsertarPedido(unittest.TestCase):
             with self.subTest(metodo=metodo, notas=notas):
                 conexion, cursor = _conexion_simulada(lastrowid=1)
                 self._insertar(conexion, metodo_pago=metodo, notas=notas)
-                self.assertEqual(cursor.execute.call_args_list[0].args[1][3], esperado)
+                valores = _sql_con(cursor, "INSERT INTO generarpedido")[0][1]
+                self.assertEqual(valores[3], esperado)
 
     def test_registra_el_recibo_en_la_misma_transaccion(self):
         conexion, cursor = _conexion_simulada(lastrowid=77)
         self._insertar(conexion)
 
-        self.assertEqual(cursor.execute.call_count, 2)
-        sql_recibo, valores = cursor.execute.call_args_list[1].args
-        self.assertIn("INSERT INTO recibospedidos", sql_recibo)
+        _sql, valores = _sql_con(cursor, "INSERT INTO recibospedidos")[0]
         self.assertEqual(valores[0], "1x Taro Milk Tea")
         self.assertEqual(valores[4], "mark")
         conexion.commit.assert_called_once()
@@ -241,7 +249,12 @@ class PruebasInsertarPedido(unittest.TestCase):
     def test_si_falla_el_recibo_el_pedido_se_conserva(self):
         """El recibo es secundario: no debe tumbar el pedido del cliente."""
         conexion, cursor = _conexion_simulada(lastrowid=77)
-        cursor.execute.side_effect = [None, RuntimeError("tabla recibospedidos ausente")]
+
+        def fallar_solo_el_recibo(sql, parametros=None):
+            if "recibospedidos" in sql:
+                raise RuntimeError("tabla recibospedidos ausente")
+
+        cursor.execute.side_effect = fallar_solo_el_recibo
 
         pedido_id = self._insertar(conexion)
 
@@ -382,6 +395,238 @@ class PruebasCerrarConexion(unittest.TestCase):
 
         menu.cerrar_conexion(None, None)
         menu.cerrar_conexion(conexion, cursor)
+
+
+# ============================================================
+# Reglas de pedidos para recoger
+# ============================================================
+class PruebasContarBebidas(unittest.TestCase):
+    """CP-MEN-32 a CP-MEN-34: contar_bebidas()."""
+
+    def test_suma_las_cantidades(self):
+        """Tres bebidas iguales son tres bebidas."""
+        self.assertEqual(menu.contar_bebidas("Taro (x3) [Mediano]"), 3)
+        self.assertEqual(
+            menu.contar_bebidas("Taro (x2) [Mediano] / Matcha (x1) [Grande]"), 3
+        )
+
+    def test_linea_sin_cantidad_cuenta_como_una(self):
+        self.assertEqual(menu.contar_bebidas("Taro Milk Tea"), 1)
+
+    def test_texto_vacio(self):
+        for vacio in ("", "   ", None):
+            with self.subTest(valor=repr(vacio)):
+                self.assertEqual(menu.contar_bebidas(vacio), 0)
+
+
+class PruebasLimiteDeBebidas(unittest.TestCase):
+    """CP-MEN-35 a CP-MEN-37: máximo 3 bebidas por pedido."""
+
+    def _texto(self, *cantidades):
+        return menu.SEPARADOR_PRODUCTOS.join(
+            f"Bebida {i} (x{qty}) [Mediano]" for i, qty in enumerate(cantidades)
+        )
+
+    def test_acepta_hasta_tres_bebidas(self):
+        casos = [(1,), (1, 1), (3,), (2, 1)]
+        for cantidades in casos:
+            with self.subTest(cantidades=cantidades):
+                conexion, cursor = _conexion_simulada(fetchone=[(0, 0.0), None], lastrowid=5)
+                with patch(_GET_CONNECTION, return_value=conexion):
+                    menu.insertar_pedido(12, self._texto(*cantidades), 65.0, "mark")
+                self.assertTrue(_sql_con(cursor, "INSERT INTO generarpedido"))
+
+    def test_rechaza_la_cuarta_bebida(self):
+        conexion, _ = _conexion_simulada()
+        with patch(_GET_CONNECTION, return_value=conexion) as conectar:
+            with self.assertRaises(menu.PedidoNoPermitido) as ctx:
+                menu.insertar_pedido(12, self._texto(2, 2), 260.0, "mark")
+
+        self.assertEqual(ctx.exception.motivo, "max_bebidas")
+        self.assertIn("4", ctx.exception.mensaje)
+        conectar.assert_not_called()
+
+    def test_tambien_rechaza_una_sola_linea_con_muchas(self):
+        """Cuatro veces la misma bebida también supera el límite."""
+        conexion, _ = _conexion_simulada()
+        with patch(_GET_CONNECTION, return_value=conexion):
+            with self.assertRaises(menu.PedidoNoPermitido) as ctx:
+                menu.insertar_pedido(12, self._texto(4), 260.0, "mark")
+
+        self.assertEqual(ctx.exception.detalles["bebidas"], 4)
+
+
+class PruebasUnPedidoActivo(unittest.TestCase):
+    """CP-MEN-36 a CP-MEN-37: un solo pedido activo por cliente."""
+
+    def test_rechaza_si_ya_tiene_pedido_en_curso(self):
+        conexion, cursor = _conexion_simulada(fetchone=[(0, 0.0), (77,)])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            with self.assertRaises(menu.PedidoNoPermitido) as ctx:
+                menu.insertar_pedido(12, "Taro (x1)", 65.0, "mark")
+
+        self.assertEqual(ctx.exception.motivo, "pedido_activo")
+        self.assertEqual(ctx.exception.detalles["pedido_id"], 77)
+        self.assertEqual(_sql_con(cursor, "INSERT INTO generarpedido"), [])
+
+    def test_permite_si_el_anterior_ya_se_entrego(self):
+        conexion, cursor = _conexion_simulada(fetchone=[(0, 0.0), None], lastrowid=78)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertEqual(menu.insertar_pedido(12, "Taro (x1)", 65.0, "mark"), 78)
+
+
+class PruebasBloqueoPorNoRecogido(unittest.TestCase):
+    """CP-MEN-38 a CP-MEN-42: bloqueo por pedidos no recogidos."""
+
+    def test_rechaza_pedido_con_adeudo(self):
+        conexion, cursor = _conexion_simulada(fetchone=[(2, 130.0)])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            with self.assertRaises(menu.PedidoNoPermitido) as ctx:
+                menu.insertar_pedido(12, "Taro (x1)", 65.0, "mark")
+
+        self.assertEqual(ctx.exception.motivo, "adeudo")
+        self.assertIn("130.00", ctx.exception.mensaje)
+        self.assertIn("local", ctx.exception.mensaje)
+        self.assertEqual(_sql_con(cursor, "INSERT INTO generarpedido"), [])
+
+    def test_el_adeudo_se_revisa_antes_que_el_pedido_activo(self):
+        """Si debe dinero, ese es el mensaje que debe ver."""
+        conexion, _ = _conexion_simulada(fetchone=[(1, 65.0), (77,)])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            with self.assertRaises(menu.PedidoNoPermitido) as ctx:
+                menu.insertar_pedido(12, "Taro (x1)", 65.0, "mark")
+
+        self.assertEqual(ctx.exception.motivo, "adeudo")
+
+    def test_adeudo_pendiente_devuelve_el_monto(self):
+        conexion, cursor = _conexion_simulada(fetchone=(1, 65.0))
+        with patch(_GET_CONNECTION, return_value=conexion):
+            adeudo = menu.adeudo_pendiente(12)
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertEqual(parametros, (12, menu.ESTATUS_NO_RECOGIDO))
+        self.assertEqual(adeudo["pedidos"], 1)
+        self.assertEqual(adeudo["total"], 65.0)
+        self.assertIn("65.00", adeudo["mensaje"])
+
+    def test_sin_adeudo_devuelve_none(self):
+        conexion, _ = _conexion_simulada(fetchone=(0, 0))
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertIsNone(menu.adeudo_pendiente(12))
+
+    def test_mensaje_en_singular_y_plural(self):
+        for pedidos, esperado in ((1, "1 pedido sin recoger"), (3, "3 pedidos sin recoger")):
+            with self.subTest(pedidos=pedidos):
+                conexion, _ = _conexion_simulada(fetchone=(pedidos, 65.0))
+                with patch(_GET_CONNECTION, return_value=conexion):
+                    self.assertIn(esperado, menu.adeudo_pendiente(12)["mensaje"])
+
+
+class PruebasPuedePedir(unittest.TestCase):
+    """CP-MEN-43 a CP-MEN-46: puede_pedir()."""
+
+    def test_cliente_al_corriente(self):
+        conexion, _ = _conexion_simulada(fetchone=[(0, 0.0), None])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            permitido, mensaje, detalles = menu.puede_pedir(12)
+
+        self.assertTrue(permitido)
+        self.assertIsNone(mensaje)
+        self.assertEqual(detalles["motivo"], "ok")
+
+    def test_cliente_con_adeudo(self):
+        conexion, _ = _conexion_simulada(fetchone=[(1, 65.0)])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            permitido, mensaje, detalles = menu.puede_pedir(12)
+
+        self.assertFalse(permitido)
+        self.assertEqual(detalles["motivo"], "adeudo")
+        self.assertIn("65.00", mensaje)
+
+    def test_cliente_con_pedido_en_curso(self):
+        conexion, _ = _conexion_simulada(fetchone=[(0, 0.0), (77,)])
+        with patch(_GET_CONNECTION, return_value=conexion):
+            permitido, mensaje, detalles = menu.puede_pedir(12)
+
+        self.assertFalse(permitido)
+        self.assertEqual(detalles["motivo"], "pedido_activo")
+        self.assertIn("#77", mensaje)
+
+    def test_falla_de_conexion_no_bloquea_al_cliente(self):
+        """insertar_pedido revalida, así que no se castiga por una caída."""
+        with patch(_GET_CONNECTION, side_effect=ConnectionError("sin red")):
+            permitido, _, detalles = menu.puede_pedir(12)
+
+        self.assertTrue(permitido)
+        self.assertEqual(detalles["motivo"], "error_conexion")
+
+
+class PruebasMarcarNoRecogido(unittest.TestCase):
+    """CP-MEN-47 a CP-MEN-53: marcado manual, automático y liquidación."""
+
+    def test_empleado_marca_el_pedido(self):
+        conexion, cursor = _conexion_simulada(rowcount=1)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertTrue(menu.marcar_no_recogido("77"))
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("SET Estatus = 'No recogido'", sql)
+        self.assertEqual(
+            parametros,
+            (menu.ESTATUS_NO_RECOGIDO, 77, menu.ESTATUS_PEDIDO_REALIZADO),
+        )
+        conexion.commit.assert_called_once()
+
+    def test_no_marca_un_pedido_ya_entregado(self):
+        conexion, _ = _conexion_simulada(rowcount=0)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertFalse(menu.marcar_no_recogido(77))
+
+    def test_marcado_automatico_por_tiempo(self):
+        conexion, cursor = _conexion_simulada(rowcount=3)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertEqual(menu.marcar_no_recogidos_vencidos(90), 3)
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("TIMESTAMPADD(MINUTE, %s", sql)
+        self.assertEqual(
+            parametros,
+            (menu.ESTATUS_NO_RECOGIDO, menu.ESTATUS_PEDIDO_REALIZADO, 90),
+        )
+
+    def test_marcado_automatico_usa_el_plazo_por_defecto(self):
+        conexion, cursor = _conexion_simulada(rowcount=0)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            menu.marcar_no_recogidos_vencidos()
+
+        self.assertEqual(cursor.execute.call_args.args[1][2], menu.MINUTOS_PARA_NO_RECOGIDO)
+
+    def test_pagar_en_el_local_desbloquea(self):
+        conexion, cursor = _conexion_simulada(rowcount=1)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertTrue(menu.liquidar_no_recogido("77"))
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("Pagado en mostrador", sql)
+        self.assertEqual(
+            parametros,
+            (menu.ESTATUS_ENTREGADO, 77, menu.ESTATUS_NO_RECOGIDO),
+        )
+
+    def test_liquidar_solo_aplica_a_no_recogidos(self):
+        conexion, _ = _conexion_simulada(rowcount=0)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertFalse(menu.liquidar_no_recogido(77))
+
+    def test_lista_de_no_recogidos_por_cliente(self):
+        filas = [{"IdGenerarPedido": 77, "Total": 65.0}]
+        conexion, cursor = _conexion_simulada(fetchall=filas)
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertEqual(menu.pedidos_no_recogidos(12), filas)
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("Clientes_Idcliente = %s", sql)
+        self.assertEqual(parametros, (menu.ESTATUS_NO_RECOGIDO, 12))
 
 
 if __name__ == "__main__":

@@ -4,6 +4,13 @@ from datetime import datetime
 
 from configuracion.base_datos import get_connection
 from componentes.sidebar import build_sidebar
+from servicios.servicio_menu import (
+    ESTATUS_NO_RECOGIDO,
+    ESTATUS_PEDIDO_REALIZADO,
+    marcar_no_recogido,
+    marcar_no_recogidos_vencidos,
+    pedidos_no_recogidos,
+)
 
 # ------------------------------------------------------------
 # Compatibilidad Flet 0.80 / 0.81+
@@ -481,8 +488,13 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             if not pedido:
                 raise Exception("No se encontró el pedido.")
 
-            if int(pedido.get("EstatusPedido_IdEstatusPedido") or 0) != 3:
+            estatus_actual = int(pedido.get("EstatusPedido_IdEstatusPedido") or 0)
+            if estatus_actual not in (ESTATUS_PEDIDO_REALIZADO, ESTATUS_NO_RECOGIDO):
                 raise Exception("Este pedido ya fue cobrado o ya no está pendiente.")
+
+            # Un pedido no recogido se cobra en el mostrador: la bebida ya
+            # no se prepara, solo se salda para desbloquear al cliente.
+            no_recogido = estatus_actual == ESTATUS_NO_RECOGIDO
 
             total = float(pedido.get("Total") or 0)
             if total <= 0:
@@ -543,7 +555,11 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                     EstatusPedido_IdEstatusPedido = %s
                 WHERE IdGenerarPedido = %s
                 """,
-                ("En preparación", 2, int(pedido_id)),
+                (
+                    "Pagado en mostrador" if no_recogido else "En preparación",
+                    4 if no_recogido else 2,
+                    int(pedido_id),
+                ),
             )
 
             # 5) Actualizar corte actual si existe.
@@ -1138,10 +1154,101 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                     ft.Row(
                         [
                             ft.Text(_money(total), size=18, weight="bold", color="#C86DD7"),
+                            ft.Row(
+                                [
+                                    ft.TextButton(
+                                        "No recogido",
+                                        on_click=lambda e, p=pedido: confirmar_no_recogido(p),
+                                    ),
+                                    ft.ElevatedButton(
+                                        "Cobrar",
+                                        icon=ICON_PAYMENT,
+                                        bgcolor="#C86DD7",
+                                        color="white",
+                                        on_click=lambda e, p=pedido: confirmar_cobro(p),
+                                    ),
+                                ],
+                                spacing=6,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=8,
+            ),
+        )
+
+    def confirmar_no_recogido(pedido: dict):
+        pedido_id = int(pedido.get("IdGenerarPedido"))
+        cliente = (pedido.get("Cliente") or "el cliente").strip() or "el cliente"
+
+        dlg = ft.AlertDialog(
+            modal=True,
+            title=ft.Text(f"Pedido #{pedido_id} no recogido"),
+            content=ft.Text(
+                f"Se marcará como no recogido. {cliente} no podrá pedir desde la app "
+                "hasta que pase al local a pagar este pedido."
+            ),
+            actions=[],
+        )
+
+        def aceptar(e=None):
+            _close_dialog(page, dlg)
+            if marcar_no_recogido(pedido_id):
+                _show_snack(page, f"Pedido #{pedido_id} marcado como no recogido.")
+            else:
+                _show_snack(
+                    page,
+                    "No se pudo marcar: el pedido ya fue cobrado o cambió de estado.",
+                    ok=False,
+                )
+            recargar_todo()
+
+        dlg.actions = [
+            ft.TextButton("Cancelar", on_click=lambda e: _close_dialog(page, dlg)),
+            ft.ElevatedButton("Marcar", bgcolor="#C86DD7", color="white", on_click=aceptar),
+        ]
+        _open_dialog(page, dlg)
+
+    def crear_card_no_recogido(pedido: dict):
+        """Pedido que el cliente no recogió: se cobra en el mostrador."""
+        pedido_id = pedido.get("IdGenerarPedido")
+        total = pedido.get("Total") or 0
+        producto = str(pedido.get("Producto") or "Sin detalle")
+        return ft.Container(
+            bgcolor="#FFF6F6",
+            border_radius=18,
+            padding=14,
+            border=ft.border.all(1, "#F0B4B4"),
+            content=ft.Column(
+                [
+                    ft.Row([
+                        ft.Text(f"Pedido #{pedido_id}", size=15, weight="bold", expand=True),
+                        ft.Container(
+                            padding=ft.padding.symmetric(horizontal=10, vertical=5),
+                            border_radius=999,
+                            bgcolor="#FCE4E4",
+                            content=ft.Text("No recogido", size=11, weight="bold", color="#C62828"),
+                        ),
+                    ]),
+                    ft.Text(
+                        f"Cliente: {(pedido.get('Cliente') or '').strip() or 'Sin cliente'}",
+                        size=12, color="#666666",
+                    ),
+                    ft.Text(f"{pedido.get('FechaPedido')}  {pedido.get('HoraPedido')}", size=11, color="#777777"),
+                    ft.Text(
+                        producto, size=12, color="#444444",
+                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
+                        no_wrap=False,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text(_money(total), size=18, weight="bold", color="#C62828"),
                             ft.ElevatedButton(
-                                "Cobrar",
+                                "Cobrar en mostrador",
                                 icon=ICON_PAYMENT,
-                                bgcolor="#C86DD7",
+                                bgcolor="#C62828",
                                 color="white",
                                 on_click=lambda e, p=pedido: confirmar_cobro(p),
                             ),
@@ -1224,12 +1331,28 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
 
     def recargar_pedidos():
         pedidos_list.controls.clear()
+
+        # Marcado automático: los pedidos que llevan demasiado tiempo sin
+        # recogerse pasan a "No recogido" al abrir la lista. No hay proceso
+        # en segundo plano, así que este es el momento en que se revisa.
+        vencidos = marcar_no_recogidos_vencidos()
+        if vencidos:
+            _show_snack(
+                page,
+                f"{vencidos} pedido(s) pasaron a 'No recogido' por tiempo de espera.",
+                ok=False,
+            )
+
         pedidos = db_listar_pedidos_pendientes()
-        if not pedidos:
+        sin_recoger = pedidos_no_recogidos()
+
+        for pedido in sin_recoger:
+            pedidos_list.controls.append(crear_card_no_recogido(pedido))
+
+        if not pedidos and not sin_recoger:
             pedidos_list.controls.append(ft.Container(padding=14, border_radius=16, bgcolor="white", border=ft.border.all(1, "#F3C8E8"), content=ft.Text("No hay pedidos pendientes de cobro.", color="#666666")))
-        else:
-            for pedido in pedidos:
-                pedidos_list.controls.append(crear_card_pedido(pedido))
+        for pedido in pedidos:
+            pedidos_list.controls.append(crear_card_pedido(pedido))
 
     def recargar_preparacion():
         preparacion_list.controls.clear()

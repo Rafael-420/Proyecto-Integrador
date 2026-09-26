@@ -9,6 +9,7 @@ from validaciones.validacion_personas import (
     validar_correo,
     validar_password,
 )
+from utilidades.flet_compat import set_error, get_error
 
 # ------------------------------------------------------------
 # Sidebar para el menú del cliente - Corallie Bubble
@@ -405,37 +406,37 @@ def build_menu_sidebar(
 
         def validar_datos():
             for campo in [txt_nombre, txt_apellido, txt_tel, txt_correo]:
-                campo.error_text = None
+                set_error(campo)
 
             ok = True
             v, msg, nom = validar_nombre(txt_nombre.value, "Nombre", 30)
             if not v:
-                txt_nombre.error_text = msg
+                set_error(txt_nombre, msg)
                 ok = False
 
             v, msg, ape = validar_nombre(txt_apellido.value, "Apellido", 30)
             if not v:
-                txt_apellido.error_text = msg
+                set_error(txt_apellido, msg)
                 ok = False
 
             v, msg, tel = validar_telefono(txt_tel.value, 10)
             if not v:
-                txt_tel.error_text = msg
+                set_error(txt_tel, msg)
                 ok = False
             else:
                 existe, msg_dup = _existe_dato_cliente("Telefono", tel, cliente_id)
                 if existe:
-                    txt_tel.error_text = msg_dup
+                    set_error(txt_tel, msg_dup)
                     ok = False
 
             v, msg, cor = validar_correo(txt_correo.value)
             if not v:
-                txt_correo.error_text = msg
+                set_error(txt_correo, msg)
                 ok = False
             else:
                 existe, msg_dup = _existe_dato_cliente("Correo", cor, cliente_id)
                 if existe:
-                    txt_correo.error_text = msg_dup
+                    set_error(txt_correo, msg_dup)
                     ok = False
 
             page.update()
@@ -445,7 +446,7 @@ def build_menu_sidebar(
             if tab_actual["value"] == "password":
                 lbl_pass_info.value = ""
                 for campo in [txt_pass_actual, txt_pass_nueva, txt_pass_confirmar]:
-                    campo.error_text = None
+                    set_error(campo)
 
                 actual = (txt_pass_actual.value or "").strip()
                 nueva = (txt_pass_nueva.value or "").strip()
@@ -458,23 +459,23 @@ def build_menu_sidebar(
                     return
 
                 if not actual:
-                    txt_pass_actual.error_text = "Ingresa tu contraseña actual"
+                    set_error(txt_pass_actual, "Ingresa tu contraseña actual")
                     page.update()
                     return
 
                 if not _password_actual_correcta(usuario_id, actual):
-                    txt_pass_actual.error_text = "La contraseña actual no es correcta"
+                    set_error(txt_pass_actual, "La contraseña actual no es correcta")
                     page.update()
                     return
 
                 ok_pass, msg, nueva_limpia = validar_password(nueva, obligatorio=True)
                 if not ok_pass:
-                    txt_pass_nueva.error_text = msg
+                    set_error(txt_pass_nueva, msg)
                     page.update()
                     return
 
                 if nueva != confirmar:
-                    txt_pass_confirmar.error_text = "Las contraseñas no coinciden"
+                    set_error(txt_pass_confirmar, "Las contraseñas no coinciden")
                     page.update()
                     return
 
@@ -600,17 +601,19 @@ def build_menu_sidebar(
     def nav_item(icono, texto, key, accion, badge=False):
         icon_control = ft.Icon(icono, size=20, color="white") if icono else ft.Container(width=20)
 
+        badge_texto = ft.Text(
+            str(cart_count()),
+            size=10,
+            weight=ft.FontWeight.BOLD,
+            color=COLOR_LILA,
+        )
+
         badge_control = ft.Container(
             visible=badge and cart_count() > 0,
             padding=ft.padding.symmetric(horizontal=7, vertical=2),
             border_radius=999,
             bgcolor="white",
-            content=ft.Text(
-                str(cart_count()),
-                size=10,
-                weight=ft.FontWeight.BOLD,
-                color=COLOR_LILA,
-            ),
+            content=badge_texto,
         )
 
         texto_control = ft.Text(
@@ -636,7 +639,12 @@ def build_menu_sidebar(
             activo = current_tab() == key
             item.bgcolor = "rgba(255,255,255,0.24)" if activo else None
             texto_control.visible = not estado["collapsed"]
-            badge_control.visible = (not estado["collapsed"]) and badge and cart_count() > 0
+            # El número del carrito se recalcula en cada repintado (antes
+            # se fijaba al crear el control y se quedaba desactualizado) y
+            # ahora también se ve con la barra colapsada, junto al ícono.
+            total_carrito = cart_count()
+            badge_texto.value = str(total_carrito)
+            badge_control.visible = badge and total_carrito > 0
             item.tooltip = texto if estado["collapsed"] else None
             item.padding = ft.padding.symmetric(
                 horizontal=10 if estado["collapsed"] else 14,

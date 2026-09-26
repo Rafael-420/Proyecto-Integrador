@@ -10,6 +10,7 @@ from validaciones.validacion_personas import (
     validar_usuario,
     validar_password,
 )
+from utilidades.flet_compat import set_error, get_error
 
 # Compatibilidad íconos
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -490,7 +491,7 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         quedar fuera de la pantalla; sin este aviso, pulsar Guardar
         parecía no hacer nada.
         """
-        con_error = [c for c in campos if getattr(c, "error_text", None)]
+        con_error = [c for c in campos if get_error(c)]
         if not con_error:
             return
         etiquetas = ", ".join(str(getattr(c, "label", "") or "campo") for c in con_error)
@@ -498,6 +499,47 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
 
     DOMINIOS_PERMITIDOS = ("gmail.com", "hotmail.com", "outlook.com", "yahoo.com")
     AYUDA_BASE = "Dominios aceptados: gmail, hotmail, outlook o yahoo (.com)"
+
+    def _formulario_desplazable(controles, campos_enfocables):
+        """Contenido de diálogo que se puede recorrer con el teclado abierto.
+
+        En celular el teclado tapa la mitad inferior de la pantalla y el
+        diálogo no se podía desplazar, así que los campos de usuario y
+        contraseña quedaban ocultos. Se resuelve con tres cosas: ancho
+        que se adapta a la pantalla, alto acotado para que la columna
+        tenga algo que desplazar, y un salto automático al campo que
+        recibe el foco.
+        """
+        ancho_pantalla = getattr(page, "width", None) or 500
+        alto_pantalla = getattr(page, "height", None) or 700
+
+        columna = ft.Column(
+            controls=controles,
+            tight=True,
+            spacing=10,
+            scroll=ft.ScrollMode.AUTO,
+            height=max(260, min(420, alto_pantalla * 0.5)),
+        )
+
+        def ir_al_campo(campo):
+            def _focus(e=None):
+                try:
+                    columna.scroll_to(key=campo.key, duration=250)
+                except Exception:
+                    pass
+            return _focus
+
+        for indice, campo in enumerate(campos_enfocables):
+            try:
+                campo.key = getattr(campo, "key", None) or f"campo_formulario_{indice}"
+                campo.on_focus = ir_al_campo(campo)
+            except Exception:
+                pass
+
+        return ft.Container(
+            width=min(500, max(280, ancho_pantalla - 40)),
+            content=columna,
+        )
 
     def _relleno_boton():
         try:
@@ -552,8 +594,8 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                 txt.value = limpio
             # Al escribir se borra el error anterior: no tiene sentido
             # dejarlo en rojo mientras el usuario lo está corrigiendo.
-            if txt.error_text:
-                txt.error_text = None
+            if get_error(txt):
+                set_error(txt)
             try:
                 txt.update()
             except Exception:
@@ -564,9 +606,9 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             txt.value = limpio
             if limpio:
                 ok_c, msg, _ = validar_correo(limpio)
-                txt.error_text = None if ok_c else msg
+                set_error(txt, None if ok_c else msg)
             else:
-                txt.error_text = None
+                set_error(txt)
             try:
                 txt.update()
             except Exception:
@@ -577,7 +619,7 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                 base = (txt.value or "").replace(" ", "").lower()
                 usuario_correo = base.split("@")[0]
                 if not usuario_correo:
-                    txt.error_text = "Escribe primero tu usuario, antes de la arroba"
+                    set_error(txt, "Escribe primero tu usuario, antes de la arroba")
                     try:
                         txt.update()
                     except Exception:
@@ -590,40 +632,51 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
 
         def actualizar_aviso(e=None):
             limpio = (txt.value or "").replace(" ", "").lower()
-            if limpio and validar_correo(limpio)[0]:
+            correo_valido = bool(limpio) and validar_correo(limpio)[0]
+            if correo_valido:
                 lbl_ayuda.value = "Correo válido"
                 lbl_ayuda.color = "#16A34A"
             else:
                 lbl_ayuda.value = AYUDA_BASE
                 lbl_ayuda.color = "#6B7280"
+            fila_dominios.visible = not correo_valido
             try:
                 lbl_ayuda.update()
+                fila_dominios.update()
             except Exception:
                 pass
 
         # El aviso va pegado al campo, arriba de los botones, para que se
         # lea junto a la etiqueta "Correo".
-        bloque_ayuda = ft.Column(
-            controls=[
-                lbl_ayuda,
-                ft.Row(
-                    controls=[
-                        ft.TextButton(
-                            content=ft.Text(f"@{d}", size=12, no_wrap=True),
-                            on_click=usar_dominio(d),
-                            style=ft.ButtonStyle(
-                                padding=_relleno_boton(),
-                                shape=ft.RoundedRectangleBorder(radius=8),
-                            ),
-                        )
-                        for d in DOMINIOS_PERMITIDOS
-                    ],
-                    spacing=2,
-                    run_spacing=0,
-                    wrap=True,
+        def chip_dominio(dominio: str):
+            """Atajo compacto para completar el correo con un toque."""
+            return ft.Container(
+                content=ft.Text(
+                    f"@{dominio}", size=11, weight=ft.FontWeight.BOLD,
+                    color="#7C3AED", no_wrap=True,
                 ),
-            ],
-            spacing=4,
+                padding=ft.padding.symmetric(horizontal=10, vertical=5),
+                border_radius=999,
+                bgcolor="#F5E8FF",
+                ink=True,
+                tooltip=f"Completar con @{dominio}",
+                on_click=usar_dominio(dominio),
+            )
+
+        # Antes eran botones con wrap: en pantalla de celular se partían
+        # en varios renglones y ocupaban media ventana. Ahora van en una
+        # sola línea que se desliza, y se ocultan cuando el correo ya es
+        # válido, porque entonces ya no sirven de nada.
+        fila_dominios = ft.Row(
+            controls=[chip_dominio(d) for d in DOMINIOS_PERMITIDOS],
+            spacing=6,
+            wrap=False,
+            scroll=ft.ScrollMode.AUTO,
+        )
+
+        bloque_ayuda = ft.Column(
+            controls=[lbl_ayuda, fila_dominios],
+            spacing=6,
             tight=True,
         )
 
@@ -681,39 +734,39 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             campos = [txt_nombre, txt_apellido, txt_telefono,
                       txt_correo, txt_usuario, txt_pass]
             for f in campos:
-                f.error_text = None
+                set_error(f)
 
             # --- Fase 1: formato (sin base de datos) ---
             ok = True
 
             ok_n, msg, nombre = validar_nombre(nombre, "Nombre", 30)
             if not ok_n:
-                txt_nombre.error_text = msg
+                set_error(txt_nombre, msg)
                 ok = False
 
             ok_a, msg, apellido = validar_nombre(apellido, "Apellido", 30)
             if not ok_a:
-                txt_apellido.error_text = msg
+                set_error(txt_apellido, msg)
                 ok = False
 
             ok_t, msg, telefono = validar_telefono(telefono, 10)
             if not ok_t:
-                txt_telefono.error_text = msg
+                set_error(txt_telefono, msg)
                 ok = False
 
             ok_c, msg, correo = validar_correo(correo)
             if not ok_c:
-                txt_correo.error_text = msg
+                set_error(txt_correo, msg)
                 ok = False
 
             ok_u, msg, usuario = validar_usuario(usuario, 20)
             if not ok_u:
-                txt_usuario.error_text = msg
+                set_error(txt_usuario, msg)
                 ok = False
 
             ok_p, msg, password = validar_password(password, obligatorio=True)
             if not ok_p:
-                txt_pass.error_text = msg
+                set_error(txt_pass, msg)
                 ok = False
 
             if not ok:
@@ -725,16 +778,16 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             try:
                 existe, msg_dup = db_existe_dato_persona("Telefono", telefono)
                 if existe:
-                    txt_telefono.error_text = msg_dup
+                    set_error(txt_telefono, msg_dup)
                     ok = False
 
                 existe, msg_dup = db_existe_dato_persona("Correo", correo)
                 if existe:
-                    txt_correo.error_text = msg_dup
+                    set_error(txt_correo, msg_dup)
                     ok = False
 
                 if db_existe_usuario(usuario):
-                    txt_usuario.error_text = "Ese usuario ya existe"
+                    set_error(txt_usuario, "Ese usuario ya existe")
                     ok = False
             except Exception as ex:
                 _refrescar_campos(campos, dlg)
@@ -754,22 +807,18 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             except Exception as ex:
                 show_snack(f"No se pudo registrar: {ex}", ok=False)
 
-        dlg.content = ft.Container(
-            width=500,
-            content=ft.Column(
-                controls=[
-                    txt_nombre,
-                    txt_apellido,
-                    txt_telefono,
-                    txt_correo,
-                    bloque_ayuda_correo,
-                    ft.Divider(),
-                    txt_usuario,
-                    txt_pass,
-                ],
-                tight=True,
-                scroll=ft.ScrollMode.AUTO,
-            ),
+        dlg.content = _formulario_desplazable(
+            [
+                txt_nombre,
+                txt_apellido,
+                txt_telefono,
+                txt_correo,
+                bloque_ayuda_correo,
+                ft.Divider(),
+                txt_usuario,
+                txt_pass,
+            ],
+            [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass],
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
@@ -820,40 +869,40 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             campos = [txt_nombre, txt_apellido, txt_telefono,
                       txt_correo, txt_usuario, txt_pass]
             for f in campos:
-                f.error_text = None
+                set_error(f)
 
             # --- Fase 1: formato (sin base de datos) ---
             ok = True
 
             ok_n, msg, nombre = validar_nombre(nombre, "Nombre", 30)
             if not ok_n:
-                txt_nombre.error_text = msg
+                set_error(txt_nombre, msg)
                 ok = False
 
             ok_a, msg, apellido = validar_nombre(apellido, "Apellido", 30)
             if not ok_a:
-                txt_apellido.error_text = msg
+                set_error(txt_apellido, msg)
                 ok = False
 
             ok_t, msg, telefono = validar_telefono(telefono, 10)
             if not ok_t:
-                txt_telefono.error_text = msg
+                set_error(txt_telefono, msg)
                 ok = False
 
             ok_c, msg, correo = validar_correo(correo)
             if not ok_c:
-                txt_correo.error_text = msg
+                set_error(txt_correo, msg)
                 ok = False
 
             ok_u, msg, usuario = validar_usuario(usuario, 20)
             if not ok_u:
-                txt_usuario.error_text = msg
+                set_error(txt_usuario, msg)
                 ok = False
 
             # La contraseña es opcional al editar.
             ok_p, msg, password = validar_password(password, obligatorio=False)
             if not ok_p:
-                txt_pass.error_text = msg
+                set_error(txt_pass, msg)
                 ok = False
 
             if not ok:
@@ -869,18 +918,18 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
                     "Telefono", telefono, "empleado", id_empleado
                 )
                 if existe:
-                    txt_telefono.error_text = msg_dup
+                    set_error(txt_telefono, msg_dup)
                     ok = False
 
                 existe, msg_dup = db_existe_dato_persona(
                     "Correo", correo, "empleado", id_empleado
                 )
                 if existe:
-                    txt_correo.error_text = msg_dup
+                    set_error(txt_correo, msg_dup)
                     ok = False
 
                 if db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
-                    txt_usuario.error_text = "Ese usuario ya existe"
+                    set_error(txt_usuario, "Ese usuario ya existe")
                     ok = False
             except Exception as ex:
                 _refrescar_campos(campos, dlg)
@@ -908,22 +957,18 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             except Exception as ex:
                 show_snack(f"No se pudo actualizar: {ex}", ok=False)
 
-        dlg.content = ft.Container(
-            width=500,
-            content=ft.Column(
-                controls=[
-                    txt_nombre,
-                    txt_apellido,
-                    txt_telefono,
-                    txt_correo,
-                    bloque_ayuda_correo,
-                    ft.Divider(),
-                    txt_usuario,
-                    txt_pass,
-                ],
-                tight=True,
-                scroll=ft.ScrollMode.AUTO,
-            ),
+        dlg.content = _formulario_desplazable(
+            [
+                txt_nombre,
+                txt_apellido,
+                txt_telefono,
+                txt_correo,
+                bloque_ayuda_correo,
+                ft.Divider(),
+                txt_usuario,
+                txt_pass,
+            ],
+            [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass],
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),

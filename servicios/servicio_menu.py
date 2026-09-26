@@ -4,7 +4,9 @@ Este archivo concentra las consultas a base de datos usadas por vista_menu.py.
 Así la vista se mantiene más limpia y sólo se encarga de construir la interfaz.
 """
 
+import re
 from datetime import datetime
+
 from configuracion.base_datos import get_connection
 
 
@@ -103,6 +105,298 @@ def resolver_cliente_id(nombre: str):
         cerrar_conexion(conn, cur)
 
 
+# --------------------------------------------------------
+# Reglas de pedidos para recoger
+# --------------------------------------------------------
+# El problema a resolver: clientes que piden por la app y no pasan por
+# la bebida. La bebida se prepara antes de cobrar, así que un pedido no
+# recogido es producto perdido.
+#
+# Reglas acordadas por el equipo:
+#   1. Un solo pedido activo por cliente.
+#   2. Máximo 3 bebidas por pedido, contando cantidades.
+#   3. Un pedido "No recogido" bloquea al cliente para pedir por la app;
+#      se desbloquea pagando ese pedido en el local.
+
+ESTATUS_PAGADO = 1
+ESTATUS_EN_PREPARACION = 2
+ESTATUS_PEDIDO_REALIZADO = 3
+ESTATUS_ENTREGADO = 4
+ESTATUS_CANCELADO = 5
+ESTATUS_NO_RECOGIDO = 6  # requiere la migración migracion_no_recogido.sql
+
+ESTATUS_ACTIVOS = (ESTATUS_PAGADO, ESTATUS_EN_PREPARACION, ESTATUS_PEDIDO_REALIZADO)
+
+MAX_BEBIDAS_POR_PEDIDO = 3
+MINUTOS_PARA_NO_RECOGIDO = 120
+
+SEPARADOR_PRODUCTOS = " / "
+
+
+class PedidoNoPermitido(Exception):
+    """El cliente no puede registrar este pedido.
+
+    A diferencia de un error técnico, esto es una regla de negocio: la
+    vista debe mostrar el mensaje al cliente, no un error del sistema.
+    """
+
+    def __init__(self, mensaje: str, motivo: str, detalles: dict | None = None):
+        super().__init__(mensaje)
+        self.mensaje = mensaje
+        self.motivo = motivo
+        self.detalles = detalles or {}
+
+
+def contar_bebidas(producto_texto: str) -> int:
+    """Cuenta las bebidas del pedido, sumando cantidades.
+
+    El texto del pedido viene como "Taro (x2) [Mediano] / Matcha (x1) [...]",
+    así que se suman los (xN). Si una línea no trae cantidad, cuenta como
+    una bebida.
+    """
+    texto = str(producto_texto or "").strip()
+    if not texto:
+        return 0
+
+    total = 0
+    for linea in texto.split(SEPARADOR_PRODUCTOS):
+        if not linea.strip():
+            continue
+        encontrado = re.search(r"\(x\s*(\d+)\)", linea)
+        total += int(encontrado.group(1)) if encontrado else 1
+    return total
+
+
+def _adeudo_con_cursor(cur, cliente_id: int) -> tuple[int, float]:
+    cur.execute(
+        """
+        SELECT COUNT(*), COALESCE(SUM(Total), 0)
+        FROM generarpedido
+        WHERE Clientes_Idcliente = %s
+          AND EstatusPedido_IdEstatusPedido = %s
+        """,
+        (int(cliente_id), ESTATUS_NO_RECOGIDO),
+    )
+    fila = cur.fetchone() or (0, 0)
+    return int(fila[0] or 0), float(fila[1] or 0)
+
+
+def _pedido_activo_con_cursor(cur, cliente_id: int):
+    cur.execute(
+        """
+        SELECT IdGenerarPedido
+        FROM generarpedido
+        WHERE Clientes_Idcliente = %s
+          AND EstatusPedido_IdEstatusPedido IN (%s, %s, %s)
+        ORDER BY IdGenerarPedido DESC
+        LIMIT 1
+        """,
+        (int(cliente_id),) + ESTATUS_ACTIVOS,
+    )
+    fila = cur.fetchone()
+    return int(fila[0]) if fila else None
+
+
+def _mensaje_adeudo(pedidos: int, total: float) -> str:
+    plural = "pedido" if pedidos == 1 else "pedidos"
+    return (
+        f"Tienes {pedidos} {plural} sin recoger por un monto pendiente de "
+        f"$ {total:,.2f}. Pasa al local a pagarlo para volver a pedir desde la app."
+    )
+
+
+def adeudo_pendiente(cliente_id: int) -> dict | None:
+    """Monto que el cliente debe por pedidos no recogidos.
+
+    Devuelve None si no debe nada. La vista lo usa para mostrarle el
+    aviso antes de que arme el carrito.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        pedidos, total = _adeudo_con_cursor(cur, cliente_id)
+    except Exception:
+        return None
+    finally:
+        cerrar_conexion(conn, cur)
+
+    if pedidos <= 0:
+        return None
+    return {"pedidos": pedidos, "total": total, "mensaje": _mensaje_adeudo(pedidos, total)}
+
+
+def puede_pedir(cliente_id: int) -> tuple[bool, str | None, dict]:
+    """Indica si el cliente puede hacer un pedido nuevo desde la app.
+
+    Devuelve (permitido, mensaje, detalles). La vista lo consulta para
+    deshabilitar el botón de pedir y explicar el motivo; insertar_pedido
+    vuelve a validarlo, porque la vista puede quedar desactualizada.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        pedidos, total = _adeudo_con_cursor(cur, cliente_id)
+        if pedidos > 0:
+            return False, _mensaje_adeudo(pedidos, total), {
+                "motivo": "adeudo",
+                "pedidos": pedidos,
+                "total": total,
+            }
+
+        activo = _pedido_activo_con_cursor(cur, cliente_id)
+        if activo:
+            return False, (
+                f"Ya tienes el pedido #{activo} en curso. "
+                "Recógelo antes de hacer uno nuevo."
+            ), {"motivo": "pedido_activo", "pedido_id": activo}
+
+        return True, None, {"motivo": "ok"}
+    except Exception:
+        # Ante una falla de conexión no se bloquea al cliente: la
+        # validación definitiva ocurre igualmente en insertar_pedido.
+        return True, None, {"motivo": "error_conexion"}
+    finally:
+        cerrar_conexion(conn, cur)
+
+
+def marcar_no_recogido(pedido_id: int) -> bool:
+    """Marca un pedido como no recogido (lo hace el empleado en caja).
+
+    Solo aplica a pedidos que siguen sin entregarse ni cobrarse.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE generarpedido
+            SET Estatus = 'No recogido',
+                EstatusPedido_IdEstatusPedido = %s
+            WHERE IdGenerarPedido = %s
+              AND EstatusPedido_IdEstatusPedido = %s
+            """,
+            (ESTATUS_NO_RECOGIDO, int(pedido_id), ESTATUS_PEDIDO_REALIZADO),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        cerrar_conexion(conn, cur)
+
+
+def marcar_no_recogidos_vencidos(minutos: int = MINUTOS_PARA_NO_RECOGIDO) -> int:
+    """Marca automáticamente los pedidos que llevan demasiado tiempo sin recogerse.
+
+    Devuelve cuántos pedidos se marcaron. No hay proceso en segundo plano:
+    la vista de caja la llama al abrir la lista de pedidos y al cerrar el
+    corte, que es cuando importa que la lista esté al día.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE generarpedido
+            SET Estatus = 'No recogido',
+                EstatusPedido_IdEstatusPedido = %s
+            WHERE EstatusPedido_IdEstatusPedido = %s
+              AND TIMESTAMPADD(MINUTE, %s, TIMESTAMP(FechaPedido, HoraPedido)) < NOW()
+            """,
+            (ESTATUS_NO_RECOGIDO, ESTATUS_PEDIDO_REALIZADO, int(minutos)),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+    except Exception:
+        if conn:
+            conn.rollback()
+        return 0
+    finally:
+        cerrar_conexion(conn, cur)
+
+
+def liquidar_no_recogido(pedido_id: int) -> bool:
+    """Registra que el cliente pagó en el local un pedido no recogido.
+
+    Es lo que lo desbloquea para volver a pedir desde la app.
+    """
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute(
+            """
+            UPDATE generarpedido
+            SET Estatus = 'Pagado en mostrador',
+                EstatusPedido_IdEstatusPedido = %s
+            WHERE IdGenerarPedido = %s
+              AND EstatusPedido_IdEstatusPedido = %s
+            """,
+            (ESTATUS_ENTREGADO, int(pedido_id), ESTATUS_NO_RECOGIDO),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+    except Exception:
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        cerrar_conexion(conn, cur)
+
+
+def pedidos_no_recogidos(cliente_id: int | None = None) -> list[dict]:
+    """Lista los pedidos no recogidos, para cobrarlos en el local."""
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        if cliente_id is None:
+            cur.execute(
+                """
+                SELECT gp.IdGenerarPedido, gp.FechaPedido, gp.HoraPedido, gp.Producto,
+                       gp.Total, gp.Clientes_Idcliente,
+                       CONCAT(COALESCE(c.Nombre, ''), ' ', COALESCE(c.Apellido, '')) AS Cliente
+                FROM generarpedido gp
+                LEFT JOIN cliente c ON c.IdCliente = gp.Clientes_Idcliente
+                WHERE gp.EstatusPedido_IdEstatusPedido = %s
+                ORDER BY gp.FechaPedido ASC, gp.HoraPedido ASC
+                """,
+                (ESTATUS_NO_RECOGIDO,),
+            )
+        else:
+            cur.execute(
+                """
+                SELECT gp.IdGenerarPedido, gp.FechaPedido, gp.HoraPedido, gp.Producto,
+                       gp.Total, gp.Clientes_Idcliente,
+                       CONCAT(COALESCE(c.Nombre, ''), ' ', COALESCE(c.Apellido, '')) AS Cliente
+                FROM generarpedido gp
+                LEFT JOIN cliente c ON c.IdCliente = gp.Clientes_Idcliente
+                WHERE gp.EstatusPedido_IdEstatusPedido = %s
+                  AND gp.Clientes_Idcliente = %s
+                ORDER BY gp.FechaPedido ASC, gp.HoraPedido ASC
+                """,
+                (ESTATUS_NO_RECOGIDO, int(cliente_id)),
+            )
+        return cur.fetchall() or []
+    except Exception:
+        return []
+    finally:
+        cerrar_conexion(conn, cur)
+
+
 def insertar_pedido(
     cliente_id: int,
     producto_texto: str,
@@ -124,6 +418,15 @@ def insertar_pedido(
     if float(total) <= 0:
         raise ValueError("No se puede registrar un pedido con total en cero.")
 
+    bebidas = contar_bebidas(producto_texto)
+    if bebidas > MAX_BEBIDAS_POR_PEDIDO:
+        raise PedidoNoPermitido(
+            f"Máximo {MAX_BEBIDAS_POR_PEDIDO} bebidas por pedido; "
+            f"tu pedido tiene {bebidas}.",
+            motivo="max_bebidas",
+            detalles={"bebidas": bebidas, "maximo": MAX_BEBIDAS_POR_PEDIDO},
+        )
+
     conn = None
     cur = None
 
@@ -137,6 +440,25 @@ def insertar_pedido(
     try:
         conn = get_connection()
         cur = conn.cursor()
+
+        # Las reglas se revisan con el mismo cursor, justo antes de
+        # insertar, para que la vista no pueda saltárselas.
+        pedidos_sin_recoger, monto = _adeudo_con_cursor(cur, cliente_id)
+        if pedidos_sin_recoger > 0:
+            raise PedidoNoPermitido(
+                _mensaje_adeudo(pedidos_sin_recoger, monto),
+                motivo="adeudo",
+                detalles={"pedidos": pedidos_sin_recoger, "total": monto},
+            )
+
+        activo = _pedido_activo_con_cursor(cur, cliente_id)
+        if activo:
+            raise PedidoNoPermitido(
+                f"Ya tienes el pedido #{activo} en curso. "
+                "Recógelo antes de hacer uno nuevo.",
+                motivo="pedido_activo",
+                detalles={"pedido_id": activo},
+            )
 
         ahora = datetime.now()
         fecha = ahora.date()

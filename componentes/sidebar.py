@@ -6,6 +6,7 @@ import flet as ft
 from configuracion.base_datos import get_connection
 from servicios import servicio_seguridad as seguridad
 from servicios.corte_manager import obtener_info_corte, resumen_por_corte, cerrar_corte
+from servicios.servicio_menu import marcar_no_recogidos_vencidos
 from servicios.servicio_empleados import obtener_empleado_por_id, actualizar_empleado_perfil
 from validaciones.validacion_personas import validar_nombre, validar_telefono, validar_correo
 
@@ -673,6 +674,13 @@ def build_sidebar(
 
         def cerrar_corte_y_salir(_ev=None):
             try:
+                # Antes de cerrar el turno, los pedidos que nadie recogió
+                # pasan a "No recogido" para que queden registrados y el
+                # cliente no siga pidiendo desde la app.
+                try:
+                    marcar_no_recogidos_vencidos()
+                except Exception:
+                    pass
                 if corte_id_int:
                     cerrar_corte(int(corte_id_int))
                 _store_remove("corte_id")
