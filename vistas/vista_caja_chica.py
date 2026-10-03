@@ -49,10 +49,93 @@ ICON_PRINT = _icon("PRINT", "LOCAL_PRINTSHOP")
 ICON_VIEW = _icon("VISIBILITY", "REMOVE_RED_EYE")
 ICON_BACK = _icon("ARROW_BACK", "ARROW_BACK_IOS", "KEYBOARD_ARROW_LEFT")
 
+ICON_INFO = _icon("INFO_OUTLINE", "INFO_OUTLINED", "INFO")
+ICON_PERSON = _icon("PERSON_OUTLINE", "PERSON_OUTLINED", "PERSON")
+ICON_TIME = _icon("SCHEDULE", "ACCESS_TIME")
+ICON_SAVE = _icon("SAVE", "CHECK")
+ICON_INBOX = _icon("INBOX", "SEARCH_OFF")
+ICON_KITCHEN = _icon("LOCAL_CAFE", "COFFEE", "RESTAURANT")
+ICON_WARNING = _icon("WARNING_AMBER", "WARNING_AMBER_ROUNDED", "WARNING")
+
 ALIGN_CENTER = (
     getattr(getattr(ft, "alignment", None), "center", None)
     or getattr(ft.Alignment, "CENTER", None)
 )
+
+# ------------------------------------------------------------
+# Paleta y helpers visuales
+# ------------------------------------------------------------
+# ft.padding.symmetric / ft.border.all no existen en Flet 0.8x;
+# ft.Padding, ft.Border y ft.Alignment sí existen en todas las versiones.
+LILA = "#C86DD7"
+LILA_SUAVE = "#F5EEFA"
+FONDO = "#F9F6FB"
+TEXTO = "#3A2E42"
+TEXTO_SUAVE = "#7A6C85"
+BORDE = "#EADCF0"
+VERDE = "#16A34A"
+ROJO = "#DC2626"
+
+# Fondo claro del ícono de cada KPI según su color principal.
+_TINTES = {
+    "#16A34A": "#DCFCE7",
+    "#DC2626": "#FEE2E2",
+    "#2563EB": "#DBEAFE",
+    "#7C3AED": "#EDE9FE",
+}
+
+UMBRAL_MOVIL = 700
+
+
+def _pad(left=0, top=0, right=0, bottom=0):
+    return ft.Padding(left=left, top=top, right=right, bottom=bottom)
+
+
+def _pad_sim(horizontal=0, vertical=0):
+    return _pad(horizontal, vertical, horizontal, vertical)
+
+
+def _borde(ancho=1, color=BORDE):
+    lado = ft.BorderSide(ancho, color)
+    return ft.Border(top=lado, right=lado, bottom=lado, left=lado)
+
+
+def _ancho_dialogo(page: ft.Page, maximo: int = 460):
+    """Ancho de diálogo que no se sale de la pantalla del celular."""
+    try:
+        ancho = float(getattr(page, "width", None) or 0)
+    except Exception:
+        ancho = 0
+    return min(maximo, ancho - 48) if ancho > 0 else maximo
+
+
+def _chip(texto, color="#7C3AED", fondo="#F5E8FF"):
+    control = texto if isinstance(texto, ft.Control) else ft.Text(str(texto), size=11, weight=ft.FontWeight.BOLD, color=color)
+    return ft.Container(
+        padding=_pad_sim(10, 5),
+        border_radius=999,
+        bgcolor=fondo,
+        content=control,
+    )
+
+
+def _titulo_seccion(texto: str, icono=None, extra=None):
+    partes = []
+    if icono is not None:
+        partes.append(
+            ft.Container(
+                width=34,
+                height=34,
+                border_radius=12,
+                bgcolor=LILA_SUAVE,
+                alignment=ft.Alignment(0, 0),
+                content=ft.Icon(icono, size=18, color=LILA),
+            )
+        )
+    partes.append(ft.Text(texto, size=16, weight=ft.FontWeight.BOLD, color=TEXTO, expand=True))
+    if extra is not None:
+        partes.append(extra)
+    return ft.Row(partes, spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
 
 # ------------------------------------------------------------
@@ -131,6 +214,9 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         corte_id = int(corte_id) if corte_id else None
     except Exception:
         corte_id = None
+
+    ancho_pagina = getattr(page, "width", None)
+    es_movil = bool(ancho_pagina and ancho_pagina < UMBRAL_MOVIL)
 
     # ------------------------------------------------------------
     # Navegación
@@ -693,10 +779,29 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         options=[ft.dropdown.Option("Ingreso"), ft.dropdown.Option("Egreso")],
         value="Ingreso",
         border_radius=12,
-        expand=1,
+        border_color=BORDE,
+        focused_border_color=LILA,
+        col={"xs": 12, "sm": 6},
+        expand=True,
     )
-    txt_monto = ft.TextField(label="Monto", border_radius=12, expand=1, keyboard_type=ft.KeyboardType.NUMBER)
-    txt_desc = ft.TextField(label="Descripción", border_radius=12, multiline=True, min_lines=2, max_lines=3)
+    txt_monto = ft.TextField(
+        label="Monto",
+        border_radius=12,
+        border_color=BORDE,
+        focused_border_color=LILA,
+        keyboard_type=ft.KeyboardType.NUMBER,
+        col={"xs": 12, "sm": 6},
+    )
+    txt_desc = ft.TextField(
+        label="Descripción",
+        border_radius=12,
+        border_color=BORDE,
+        focused_border_color=LILA,
+        multiline=True,
+        min_lines=2,
+        max_lines=3,
+        col={"xs": 12},
+    )
 
     def _filtrar_monto(e=None):
         valor = txt_monto.value or ""
@@ -714,67 +819,136 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
 
     txt_monto.on_change = _filtrar_monto
 
-    tabla = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("ID")),
-            ft.DataColumn(ft.Text("Tipo")),
-            ft.DataColumn(ft.Text("Monto")),
-            ft.DataColumn(ft.Text("Descripción / Ticket")),
-            ft.DataColumn(ft.Text("Fecha")),
-            ft.DataColumn(ft.Text("Hora")),
-        ],
-        rows=[],
-        border_radius=12,
-        heading_row_color="#F3E9F7",
-        data_row_min_height=52,
-        data_row_max_height=88,
-        column_spacing=22,
-    )
+    # Movimientos recientes: antes era un DataTable de 6 columnas que en
+    # el celular (y en la columna angosta de escritorio) obligaba a
+    # arrastrar de lado. Ahora cada movimiento es una fila compacta.
+    tabla = ft.Column(spacing=8)
 
-    card_ingresos = ft.Container(expand=True)
-    card_egresos = ft.Container(expand=True)
-    card_balance = ft.Container(expand=True)
-    card_movimientos = ft.Container(expand=True)
-    lbl_estado = ft.Text("", size=12, color="#6B7280")
-    lbl_corte = ft.Text(f"Corte actual: {corte_id if corte_id else 'sin corte'}", size=12, color="#6B7280")
+    def _tarjeta_kpi():
+        # recargar_resumen() solo reemplaza .content, así que el estilo de
+        # la tarjeta tiene que vivir aquí (antes se perdía y los KPI se
+        # veían sin fondo ni borde).
+        return ft.Container(
+            bgcolor="white",
+            border_radius=18,
+            padding=14,
+            border=_borde(1, BORDE),
+            col={"xs": 6, "md": 3},
+        )
+
+    card_ingresos = _tarjeta_kpi()
+    card_egresos = _tarjeta_kpi()
+    card_balance = _tarjeta_kpi()
+    card_movimientos = _tarjeta_kpi()
+    lbl_estado = ft.Text("", size=12, color=TEXTO_SUAVE)
+    lbl_corte = ft.Text(
+        f"Corte #{corte_id}" if corte_id else "Sin corte abierto",
+        size=11,
+        weight=ft.FontWeight.BOLD,
+        color="#7C3AED",
+    )
     lbl_nota_balance = ft.Text(
         f"El historial muestra solo los movimientos del corte actual #{corte_id}. El balance incluye el fondo disponible anterior.",
-        size=11,
-        color="#6B7280",
+        size=12,
+        color=TEXTO_SUAVE,
     )
-    pedidos_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
-    preparacion_list = ft.Column(spacing=12, scroll=ft.ScrollMode.AUTO, expand=True)
+    pedidos_list = ft.Column(spacing=12)
+    preparacion_list = ft.Column(spacing=12)
 
     def crear_kpi(titulo: str, valor: str, icono=None, color="#C86DD7", subtitulo: str = ""):
         icon_ctrl = ft.Container(
-            width=50,
-            height=50,
-            border_radius=18,
-            bgcolor="#F7E8FF",
-            alignment=ALIGN_CENTER,
-            content=ft.Icon(icono, color=color, size=26) if icono else ft.Text(""),
+            width=34,
+            height=34,
+            border_radius=12,
+            bgcolor=_TINTES.get(color, "#F7E8FF"),
+            alignment=ft.Alignment(0, 0),
+            content=ft.Icon(icono, color=color, size=18) if icono else ft.Text(""),
         )
         return ft.Container(
-            expand=True,
-            bgcolor="white",
-            border_radius=22,
-            padding=16,
-            border=ft.border.all(1, "#F0D8F5"),
-            content=ft.Row(
+            content=ft.Column(
                 [
                     icon_ctrl,
+                    ft.Text(titulo, size=13, color=TEXTO_SUAVE),
+                    ft.Text(valor, size=20, weight=ft.FontWeight.BOLD, color=color),
+                    ft.Text(subtitulo, size=11, color=TEXTO_SUAVE) if subtitulo else ft.Container(height=0),
+                ],
+                spacing=4,
+            ),
+        )
+
+    def crear_fila_movimiento(r: dict):
+        es_ingreso = str(r.get("TipoMovimiento", "")).lower() == "ingreso"
+        color = VERDE if es_ingreso else ROJO
+        signo = "+" if es_ingreso else "−"
+        # Tipo y monto en el primer renglón; la descripción abajo usa todo
+        # el ancho de la fila para que en el celular no quede apretada.
+        return ft.Container(
+            bgcolor="white",
+            border_radius=14,
+            padding=_pad_sim(12, 10),
+            border=_borde(1, BORDE),
+            content=ft.Row(
+                [
+                    ft.Container(
+                        width=36,
+                        height=36,
+                        border_radius=18,
+                        bgcolor=_TINTES[color],
+                        alignment=ft.Alignment(0, 0),
+                        content=ft.Icon(ICON_UP if es_ingreso else ICON_DOWN, size=18, color=color),
+                    ),
                     ft.Column(
                         [
-                            ft.Text(titulo, size=12, color="#666666"),
-                            ft.Text(valor, size=22, weight="bold", color=color),
-                            ft.Text(subtitulo, size=10, color="#6B7280") if subtitulo else ft.Container(height=0),
+                            ft.Row(
+                                [
+                                    ft.Text(
+                                        str(r.get("TipoMovimiento", "")),
+                                        size=13,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=TEXTO,
+                                        expand=True,
+                                    ),
+                                    ft.Text(f"{signo}{_money(r.get('Monto', 0))}", size=14, weight=ft.FontWeight.BOLD, color=color),
+                                ],
+                                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                            ),
+                            ft.Text(
+                                str(r.get("Descripcion", "")) or "Sin descripción",
+                                size=12,
+                                color=TEXTO,
+                                max_lines=2,
+                                overflow=ft.TextOverflow.ELLIPSIS,
+                            ),
+                            ft.Text(
+                                f"#{r.get('idMovimiento', '')} · {r.get('Fecha', '')} · {r.get('Hora', '')}",
+                                size=11,
+                                color=TEXTO_SUAVE,
+                            ),
                         ],
                         spacing=2,
                         expand=True,
                     ),
                 ],
-                spacing=12,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=10,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
+        )
+
+    def lista_vacia(texto: str):
+        return ft.Container(
+            padding=20,
+            border_radius=16,
+            bgcolor="white",
+            border=_borde(1, BORDE),
+            alignment=ft.Alignment(0, 0),
+            content=ft.Column(
+                [
+                    ft.Icon(ICON_INBOX, size=30, color=TEXTO_SUAVE),
+                    ft.Text(texto, size=13, color=TEXTO_SUAVE, text_align=ft.TextAlign.CENTER),
+                ],
+                spacing=6,
+                tight=True,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             ),
         )
 
@@ -787,20 +961,10 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         lbl_estado.value = f"Movimientos registrados: {movimientos}"
 
     def recargar_tabla():
-        tabla.rows = []
-        for r in db_listar_movimientos(limit=30):
-            tabla.rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text(str(r.get("idMovimiento", "")))),
-                        ft.DataCell(ft.Text(str(r.get("TipoMovimiento", "")))),
-                        ft.DataCell(ft.Text(_money(r.get("Monto", 0)))),
-                        ft.DataCell(ft.Text(str(r.get("Descripcion", "")), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
-                        ft.DataCell(ft.Text(str(r.get("Fecha", "")))),
-                        ft.DataCell(ft.Text(str(r.get("Hora", "")))),
-                    ]
-                )
-            )
+        movimientos = db_listar_movimientos(limit=30)
+        tabla.controls = [crear_fila_movimiento(r) for r in movimientos] or [
+            lista_vacia("Todavía no hay movimientos en este corte.")
+        ]
 
     def validar_formulario():
         ok = True
@@ -879,7 +1043,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                 spacing=8,
             ),
             content=ft.Container(
-                width=560,
+                width=_ancho_dialogo(page, 460),
                 padding=4,
                 content=ft.Column(
                     tight=True,
@@ -889,7 +1053,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                             padding=16,
                             border_radius=18,
                             bgcolor="#FFF7FB",
-                            border=ft.border.all(1, "#F3C8E8"),
+                            border=_borde(1, "#F3C8E8"),
                             content=ft.Column(
                                 tight=True,
                                 spacing=8,
@@ -938,7 +1102,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                 [
                     ft.Text(f"Pedido #{pedido_id}", size=20, weight="bold", expand=True),
                     ft.Container(
-                        padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                        padding=_pad_sim(12, 6),
                         border_radius=999,
                         bgcolor="#F5E8FF",
                         content=ft.Text("En preparación" if es_preparacion else str(pedido.get("Estatus") or "Por cobrar"), size=12, weight="bold", color="#7C3AED"),
@@ -947,7 +1111,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
             ),
             content=ft.Container(
-                width=720,
+                width=_ancho_dialogo(page, 720),
                 padding=6,
                 content=ft.Column(
                     tight=True,
@@ -957,7 +1121,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                             padding=18,
                             border_radius=20,
                             bgcolor="white",
-                            border=ft.border.all(1, "#E9C8F7" if es_preparacion else "#F3C8E8"),
+                            border=_borde(1, "#E9C8F7" if es_preparacion else "#F3C8E8"),
                             content=ft.Column(
                                 tight=True,
                                 spacing=10,
@@ -970,7 +1134,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                                         padding=14,
                                         border_radius=16,
                                         bgcolor="#FAF5FF",
-                                        border=ft.border.all(1, "#E9D5FF"),
+                                        border=_borde(1, "#E9D5FF"),
                                         content=ft.Text(producto, size=14, color="#333333", selectable=True),
                                     ),
                                     ft.Row([
@@ -1017,8 +1181,9 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             value="Efectivo",
             border_radius=12,
             options=[ft.dropdown.Option("Efectivo"), ft.dropdown.Option("Tarjeta"), ft.dropdown.Option("Transferencia")],
+            col={"xs": 12, "sm": 6},
         )
-        txt_recibido = ft.TextField(label="Efectivo recibido", border_radius=12, keyboard_type=ft.KeyboardType.NUMBER, value=str(total))
+        txt_recibido = ft.TextField(label="Efectivo recibido", border_radius=12, keyboard_type=ft.KeyboardType.NUMBER, value=str(total), col={"xs": 12, "sm": 6})
         lbl_cambio = ft.Text(_money(0), size=22, weight="bold", color="#2E7D32")
         lbl_error_pago = ft.Text("", size=12, color="#C62828")
         lbl_balance = ft.Text(_money(obtener_balance_actual()), weight="bold")
@@ -1027,7 +1192,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             padding=14,
             border_radius=16,
             bgcolor="#FFF7FB",
-            border=ft.border.all(1, "#F3C8E8"),
+            border=_borde(1, "#F3C8E8"),
             content=ft.Column(
                 [
                     ft.Text("Resumen tipo ticket", size=15, weight="bold"),
@@ -1068,13 +1233,14 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             modal=True,
             title=ft.Text(f"Cobrar pedido #{pedido_id}"),
             content=ft.Container(
-                width=560,
+                width=_ancho_dialogo(page, 460),
                 content=ft.Column(
                     tight=True,
                     spacing=14,
+                    scroll=ft.ScrollMode.AUTO,
                     controls=[
                         ft.Text("Si es efectivo, solo necesitas fondo cuando debes dar cambio.", size=12, color="#666666"),
-                        ft.Row([dd_metodo, txt_recibido], spacing=12),
+                        ft.ResponsiveRow([dd_metodo, txt_recibido], spacing=12, run_spacing=12),
                         resumen_ticket,
                         lbl_error_pago,
                     ],
@@ -1121,62 +1287,107 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         calcular_cambio()
         _open_dialog(page, dlg)
 
-    def crear_card_pedido(pedido: dict):
+    def _card_pedido(
+        pedido: dict,
+        chip,
+        total_texto: str,
+        total_color: str,
+        botones: list,
+        borde: str = "#F3C8E8",
+        fondo: str = "white",
+        on_click=None,
+        lineas_detalle: int = 2,
+    ):
+        """Tarjeta común para los pedidos: se acomoda a cualquier ancho.
+
+        Antes el total y los botones compartían una sola fila fija, y en
+        el celular los botones se salían de la tarjeta. Ahora el total va
+        en su propio renglón y los botones ocupan el ancho completo.
+        """
         pedido_id = pedido.get("IdGenerarPedido")
-        total = pedido.get("Total") or 0
         cliente = (pedido.get("Cliente") or "Sin cliente").strip() or "Sin cliente"
         producto = str(pedido.get("Producto") or "Sin detalle")
         return ft.Container(
-            bgcolor="white",
+            bgcolor=fondo,
             border_radius=18,
             padding=14,
-            border=ft.border.all(1, "#F3C8E8"),
-            ink=True,
-            on_click=lambda e, p=pedido: abrir_pedido_grande(p, tipo="cobro"),
+            border=_borde(1, borde),
+            ink=on_click is not None,
+            on_click=on_click,
             content=ft.Column(
                 [
-                    ft.Row([
-                        ft.Text(f"Pedido #{pedido_id}", size=15, weight="bold", expand=True),
-                        ft.Container(
-                            padding=ft.padding.symmetric(horizontal=10, vertical=5),
-                            border_radius=999,
-                            bgcolor="#F5E8FF",
-                            content=ft.Text(str(pedido.get("Estatus") or "Pendiente"), size=11, weight="bold", color="#7C3AED"),
-                        ),
-                    ]),
-                    ft.Text(f"Cliente: {cliente}", size=12, color="#666666"),
-                    ft.Text(f"{pedido.get('FechaPedido')}  {pedido.get('HoraPedido')}", size=11, color="#777777"),
-                    ft.Text(
-                        producto, size=12, color="#444444",
-                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
-                        no_wrap=False,
+                    ft.Row(
+                        [
+                            ft.Text(f"Pedido #{pedido_id}", size=16, weight=ft.FontWeight.BOLD, color=TEXTO, expand=True),
+                            chip,
+                        ],
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                     ft.Row(
                         [
-                            ft.Text(_money(total), size=18, weight="bold", color="#C86DD7"),
                             ft.Row(
                                 [
-                                    ft.TextButton(
-                                        "No recogido",
-                                        on_click=lambda e, p=pedido: confirmar_no_recogido(p),
-                                    ),
-                                    ft.ElevatedButton(
-                                        "Cobrar",
-                                        icon=ICON_PAYMENT,
-                                        bgcolor="#C86DD7",
-                                        color="white",
-                                        on_click=lambda e, p=pedido: confirmar_cobro(p),
-                                    ),
+                                    ft.Icon(ICON_PERSON, size=14, color=TEXTO_SUAVE),
+                                    ft.Text(cliente, size=12, color=TEXTO_SUAVE, max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
                                 ],
-                                spacing=6,
+                                spacing=4,
+                                tight=True,
+                            ),
+                            ft.Row(
+                                [
+                                    ft.Icon(ICON_TIME, size=14, color=TEXTO_SUAVE),
+                                    ft.Text(f"{pedido.get('FechaPedido')}  {pedido.get('HoraPedido')}", size=12, color=TEXTO_SUAVE),
+                                ],
+                                spacing=4,
+                                tight=True,
                             ),
                         ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=14,
+                        run_spacing=4,
+                        wrap=True,
                     ),
+                    ft.Container(
+                        padding=_pad_sim(12, 10),
+                        border_radius=12,
+                        bgcolor="#FAF5FF" if fondo == "white" else "white",
+                        content=ft.Text(
+                            producto,
+                            size=13,
+                            color="#444444",
+                            max_lines=lineas_detalle,
+                            overflow=ft.TextOverflow.ELLIPSIS,
+                        ),
+                    ),
+                    ft.Text(total_texto, size=19, weight=ft.FontWeight.BOLD, color=total_color),
+                    ft.Column(botones, spacing=4, horizontal_alignment=ft.CrossAxisAlignment.STRETCH),
                 ],
-                spacing=8,
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             ),
+        )
+
+    def crear_card_pedido(pedido: dict):
+        total = pedido.get("Total") or 0
+        return _card_pedido(
+            pedido,
+            chip=_chip(str(pedido.get("Estatus") or "Pendiente")),
+            total_texto=_money(total),
+            total_color=LILA,
+            on_click=lambda e, p=pedido: abrir_pedido_grande(p, tipo="cobro"),
+            botones=[
+                ft.ElevatedButton(
+                    "Cobrar",
+                    icon=ICON_PAYMENT,
+                    bgcolor=LILA,
+                    color="white",
+                    on_click=lambda e, p=pedido: confirmar_cobro(p),
+                ),
+                ft.TextButton(
+                    "Marcar como no recogido",
+                    style=ft.ButtonStyle(color=ROJO),
+                    on_click=lambda e, p=pedido: confirmar_no_recogido(p),
+                ),
+            ],
         )
 
     def confirmar_no_recogido(pedido: dict):
@@ -1213,52 +1424,23 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
 
     def crear_card_no_recogido(pedido: dict):
         """Pedido que el cliente no recogió: se cobra en el mostrador."""
-        pedido_id = pedido.get("IdGenerarPedido")
         total = pedido.get("Total") or 0
-        producto = str(pedido.get("Producto") or "Sin detalle")
-        return ft.Container(
-            bgcolor="#FFF6F6",
-            border_radius=18,
-            padding=14,
-            border=ft.border.all(1, "#F0B4B4"),
-            content=ft.Column(
-                [
-                    ft.Row([
-                        ft.Text(f"Pedido #{pedido_id}", size=15, weight="bold", expand=True),
-                        ft.Container(
-                            padding=ft.padding.symmetric(horizontal=10, vertical=5),
-                            border_radius=999,
-                            bgcolor="#FCE4E4",
-                            content=ft.Text("No recogido", size=11, weight="bold", color="#C62828"),
-                        ),
-                    ]),
-                    ft.Text(
-                        f"Cliente: {(pedido.get('Cliente') or '').strip() or 'Sin cliente'}",
-                        size=12, color="#666666",
-                    ),
-                    ft.Text(f"{pedido.get('FechaPedido')}  {pedido.get('HoraPedido')}", size=11, color="#777777"),
-                    ft.Text(
-                        producto, size=12, color="#444444",
-                        max_lines=2, overflow=ft.TextOverflow.ELLIPSIS,
-                        no_wrap=False,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text(_money(total), size=18, weight="bold", color="#C62828"),
-                            ft.ElevatedButton(
-                                "Cobrar en mostrador",
-                                icon=ICON_PAYMENT,
-                                bgcolor="#C62828",
-                                color="white",
-                                on_click=lambda e, p=pedido: confirmar_cobro(p),
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                ],
-                spacing=8,
-            ),
+        return _card_pedido(
+            pedido,
+            chip=_chip("No recogido", color="#C62828", fondo="#FCE4E4"),
+            total_texto=_money(total),
+            total_color="#C62828",
+            borde="#F0B4B4",
+            fondo="#FFF6F6",
+            botones=[
+                ft.ElevatedButton(
+                    "Cobrar en mostrador",
+                    icon=ICON_PAYMENT,
+                    bgcolor="#C62828",
+                    color="white",
+                    on_click=lambda e, p=pedido: confirmar_cobro(p),
+                ),
+            ],
         )
 
     def confirmar_listo_entrega(pedido: dict):
@@ -1282,51 +1464,24 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         _open_dialog(page, dlg)
 
     def crear_card_preparacion(pedido: dict):
-        pedido_id = pedido.get("IdGenerarPedido")
         total = pedido.get("Total") or 0
-        cliente = (pedido.get("Cliente") or "Sin cliente").strip() or "Sin cliente"
-        producto = str(pedido.get("Producto") or "Sin detalle")
-        return ft.Container(
-            bgcolor="white",
-            border_radius=18,
-            padding=14,
-            border=ft.border.all(1, "#D9B8F0"),
-            ink=True,
+        return _card_pedido(
+            pedido,
+            chip=_chip("En preparación"),
+            total_texto=f"Cobrado: {_money(total)}",
+            total_color=LILA,
+            borde="#D9B8F0",
             on_click=lambda e, p=pedido: abrir_pedido_grande(p, tipo="preparacion"),
-            content=ft.Column(
-                [
-                    ft.Row([
-                        ft.Text(f"Pedido #{pedido_id}", size=15, weight="bold", expand=True),
-                        ft.Container(
-                            padding=ft.padding.symmetric(horizontal=10, vertical=5),
-                            border_radius=999,
-                            bgcolor="#F5E8FF",
-                            content=ft.Text("En preparación", size=11, weight="bold", color="#7C3AED"),
-                        ),
-                    ]),
-                    ft.Text(f"Cliente: {cliente}", size=12, color="#666666"),
-                    ft.Text(
-                        producto, size=12, color="#444444",
-                        max_lines=3, overflow=ft.TextOverflow.ELLIPSIS,
-                        no_wrap=False,
-                    ),
-                    ft.Row(
-                        [
-                            ft.Text(f"Cobrado: {_money(total)}", size=14, weight="bold", color="#C86DD7"),
-                            ft.ElevatedButton(
-                                "Listo para entrega",
-                                icon=ICON_CHECK,
-                                bgcolor="#C86DD7",
-                                color="white",
-                                on_click=lambda e, p=pedido: confirmar_listo_entrega(p),
-                            ),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                ],
-                spacing=8,
-            ),
+            lineas_detalle=3,
+            botones=[
+                ft.ElevatedButton(
+                    "Listo para entrega",
+                    icon=ICON_CHECK,
+                    bgcolor=LILA,
+                    color="white",
+                    on_click=lambda e, p=pedido: confirmar_listo_entrega(p),
+                ),
+            ],
         )
 
     def recargar_pedidos():
@@ -1350,7 +1505,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             pedidos_list.controls.append(crear_card_no_recogido(pedido))
 
         if not pedidos and not sin_recoger:
-            pedidos_list.controls.append(ft.Container(padding=14, border_radius=16, bgcolor="white", border=ft.border.all(1, "#F3C8E8"), content=ft.Text("No hay pedidos pendientes de cobro.", color="#666666")))
+            pedidos_list.controls.append(lista_vacia("No hay pedidos pendientes de cobro."))
         for pedido in pedidos:
             pedidos_list.controls.append(crear_card_pedido(pedido))
 
@@ -1358,7 +1513,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         preparacion_list.controls.clear()
         pedidos = db_listar_pedidos_en_preparacion()
         if not pedidos:
-            preparacion_list.controls.append(ft.Container(padding=14, border_radius=16, bgcolor="white", border=ft.border.all(1, "#D9B8F0"), content=ft.Text("No hay pedidos en preparación.", color="#666666")))
+            preparacion_list.controls.append(lista_vacia("No hay pedidos en preparación."))
         else:
             for pedido in pedidos:
                 preparacion_list.controls.append(crear_card_preparacion(pedido))
@@ -1387,39 +1542,15 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
     )
 
     def abrir_historial_movimientos(e=None):
-        tabla_historial = ft.DataTable(
-            columns=[
-                ft.DataColumn(ft.Text("ID")),
-                ft.DataColumn(ft.Text("Tipo")),
-                ft.DataColumn(ft.Text("Monto")),
-                ft.DataColumn(ft.Text("Descripción / Ticket")),
-                ft.DataColumn(ft.Text("Fecha")),
-                ft.DataColumn(ft.Text("Hora")),
-            ],
-            rows=[],
-            border_radius=12,
-            heading_row_color="#F3E9F7",
-            data_row_min_height=52,
-            data_row_max_height=88,
-            column_spacing=24,
-        )
+        # Misma fila compacta que "Movimientos recientes": el DataTable de
+        # 6 columnas no cabía en el celular.
+        lista_historial = ft.ListView(expand=True, spacing=8, padding=_pad(0, 0, 4, 0))
 
         def pintar_historial():
-            tabla_historial.rows = []
             movimientos = db_listar_movimientos(limit=250)
-            for r in movimientos:
-                tabla_historial.rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(str(r.get("idMovimiento", "")))),
-                            ft.DataCell(ft.Text(str(r.get("TipoMovimiento", "")))),
-                            ft.DataCell(ft.Text(_money(r.get("Monto", 0)))),
-                            ft.DataCell(ft.Text(str(r.get("Descripcion", "")), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
-                            ft.DataCell(ft.Text(str(r.get("Fecha", "")))),
-                            ft.DataCell(ft.Text(str(r.get("Hora", "")))),
-                        ]
-                    )
-                )
+            lista_historial.controls = [crear_fila_movimiento(r) for r in movimientos] or [
+                lista_vacia("Todavía no hay movimientos en este corte.")
+            ]
             lbl_total_hist.value = f"Mostrando {len(movimientos)} movimientos del corte #{corte_id if corte_id else '—'}"
 
         def volver_caja(ev=None):
@@ -1437,44 +1568,59 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             cerrar_sesion_real=cerrar_sesion,
         )
 
-        lbl_total_hist = ft.Text("", size=12, color="#6B7280")
+        lbl_total_hist = ft.Text("", size=12, color=TEXTO_SUAVE)
+        encabezado_historial = ft.ResponsiveRow(
+            [
+                ft.Column(
+                    [
+                        ft.Text("Historial de movimientos", size=22, weight=ft.FontWeight.BOLD, color=LILA),
+                        lbl_total_hist,
+                    ],
+                    spacing=2,
+                    col={"xs": 12, "md": 7},
+                ),
+                ft.Container(
+                    col={"xs": 12, "md": 5},
+                    alignment=ft.Alignment(-1, 0) if es_movil else ft.Alignment(1, 0),
+                    content=ft.Row(
+                        [
+                            ft.OutlinedButton("Volver", icon=ICON_BACK, on_click=volver_caja),
+                            ft.ElevatedButton(
+                                "Actualizar",
+                                icon=ICON_REFRESH,
+                                bgcolor=LILA,
+                                color="white",
+                                on_click=lambda ev: (pintar_historial(), page.update()),
+                            ),
+                        ],
+                        spacing=8,
+                        wrap=True,
+                        tight=True,
+                    ),
+                ),
+            ],
+            spacing=12,
+            run_spacing=10,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
+
         contenido_historial = ft.Container(
             expand=True,
-            bgcolor="#F9F6FB",
-            padding=20,
+            bgcolor=FONDO,
+            padding=12 if es_movil else 20,
             content=ft.Column(
                 [
-                    ft.Row(
-                        [
-                            ft.Column(
-                                [
-                                    ft.Text("Historial de movimientos", size=24, weight="bold", color="#C86DD7"),
-                                    ft.Text(f"Solo movimientos del corte #{corte_id if corte_id else '—'}", size=12, color="#6B7280"),
-                                    lbl_total_hist,
-                                ],
-                                spacing=2,
-                                expand=True,
-                            ),
-                            ft.OutlinedButton("Volver a caja chica", on_click=volver_caja),
-                            ft.ElevatedButton("Actualizar", icon=ICON_REFRESH, bgcolor="#C86DD7", color="white", on_click=lambda ev: (pintar_historial(), page.update())),
-                        ],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    ),
+                    encabezado_historial,
                     ft.Container(
                         expand=True,
-                        bgcolor="white",
-                        border_radius=22,
-                        padding=14,
-                        border=ft.border.all(1, "#F0D8F5"),
-                        content=ft.ListView(
-                            expand=True,
-                            controls=[
-                                ft.Row([ft.Container(content=tabla_historial, padding=6)], scroll=ft.ScrollMode.AUTO),
-                            ],
-                        ),
+                        bgcolor=LILA_SUAVE,
+                        border_radius=20,
+                        padding=10,
+                        border=_borde(1, BORDE),
+                        content=lista_historial,
                     ),
                 ],
-                spacing=16,
+                spacing=14,
                 expand=True,
             ),
         )
@@ -1483,8 +1629,14 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         page.views.append(
             ft.View(
                 route="/historial_movimientos",
-                controls=[ft.Row([sidebar_historial, contenido_historial], expand=True)],
-                appbar=ft.AppBar(title=ft.Text("Historial de movimientos"), bgcolor="#C86DD7", color="white", automatically_imply_leading=False),
+                controls=[ft.Row([sidebar_historial, contenido_historial], expand=True, spacing=0)],
+                appbar=ft.AppBar(
+                    leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_caja),
+                    title=ft.Text("Historial de movimientos"),
+                    bgcolor=LILA,
+                    color="white",
+                    automatically_imply_leading=False,
+                ),
             )
         )
         page.update()
@@ -1492,104 +1644,159 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
     # ------------------------------------------------------------
     # Layout principal
     # ------------------------------------------------------------
-    header = ft.Row([
-        ft.Column([ft.Text("Caja chica", size=24, weight="bold", color="#C86DD7"), lbl_corte, lbl_estado], spacing=2, expand=True),
-        ft.OutlinedButton("Historial de movimientos", icon=ICON_LIST, on_click=abrir_historial_movimientos),
-        ft.ElevatedButton("Actualizar", icon=ICON_REFRESH, bgcolor="#C86DD7", color="white", on_click=recargar_todo),
-    ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN)
+    # Antes el título y los dos botones compartían una fila fija: en el
+    # celular los botones se llevaban todo el ancho y "Caja chica" quedaba
+    # escrito letra por letra en vertical. Ahora el encabezado es un
+    # ResponsiveRow: en pantallas angostas los botones bajan de renglón.
+    header = ft.ResponsiveRow(
+        [
+            ft.Column(
+                [
+                    ft.Text("Caja chica", size=24, weight=ft.FontWeight.BOLD, color=LILA),
+                    ft.Row(
+                        [_chip(lbl_corte), lbl_estado],
+                        spacing=8,
+                        wrap=True,
+                        run_spacing=4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ],
+                spacing=4,
+                col={"xs": 12, "md": 6},
+            ),
+            ft.Container(
+                col={"xs": 12, "md": 6},
+                alignment=ft.Alignment(-1, 0) if es_movil else ft.Alignment(1, 0),
+                content=ft.Row(
+                    [
+                        ft.OutlinedButton("Historial", icon=ICON_LIST, tooltip="Historial de movimientos", on_click=abrir_historial_movimientos),
+                        ft.ElevatedButton("Actualizar", icon=ICON_REFRESH, bgcolor=LILA, color="white", on_click=recargar_todo),
+                    ],
+                    spacing=8,
+                    wrap=True,
+                    tight=True,
+                ),
+            ),
+        ],
+        spacing=12,
+        run_spacing=10,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
 
-    resumen_row = ft.Row([card_ingresos, card_egresos, card_balance, card_movimientos], spacing=16)
+    # 2 x 2 en el celular, 4 en una fila en pantallas anchas.
+    resumen_row = ft.ResponsiveRow(
+        [card_ingresos, card_egresos, card_balance, card_movimientos],
+        spacing=12,
+        run_spacing=12,
+    )
+
+    nota_balance = ft.Container(
+        padding=_pad_sim(12, 10),
+        border_radius=14,
+        bgcolor=LILA_SUAVE,
+        content=ft.Row(
+            [ft.Icon(ICON_INFO, size=18, color=LILA), ft.Container(content=lbl_nota_balance, expand=True)],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        ),
+    )
 
     formulario = ft.Container(
         bgcolor="white",
-        border_radius=22,
-        padding=18,
-        border=ft.border.all(1, "#F0D8F5"),
+        border_radius=20,
+        padding=16,
+        border=_borde(1, BORDE),
         content=ft.Column([
-            ft.Row([ft.Icon(ICON_LIST, color="#C86DD7"), ft.Text("Registrar movimiento manual", size=17, weight="bold")], spacing=8),
-            ft.Row([dd_tipo, txt_monto], spacing=12),
-            txt_desc,
-            ft.Row([
-                ft.OutlinedButton("Limpiar", icon=ICON_CLEAN, on_click=lambda e: limpiar_formulario()),
-                ft.Container(expand=True),
-                ft.ElevatedButton("Guardar movimiento", bgcolor="#C86DD7", color="white", on_click=guardar_movimiento),
-            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-        ], spacing=12),
+            _titulo_seccion("Registrar movimiento manual", ICON_WALLET),
+            ft.ResponsiveRow([dd_tipo, txt_monto, txt_desc], spacing=12, run_spacing=12),
+            ft.ResponsiveRow(
+                [
+                    ft.OutlinedButton("Limpiar", icon=ICON_CLEAN, on_click=lambda e: limpiar_formulario(), col={"xs": 12, "sm": 5}),
+                    ft.ElevatedButton("Guardar movimiento", icon=ICON_SAVE, bgcolor=LILA, color="white", on_click=guardar_movimiento, col={"xs": 12, "sm": 7}),
+                ],
+                spacing=8,
+                run_spacing=8,
+            ),
+        ], spacing=14),
     )
 
     pedidos_panel = ft.Container(
-        expand=True,
         bgcolor="#FFF7FB",
-        border_radius=22,
+        border_radius=20,
         padding=14,
-        border=ft.border.all(1, "#F3C8E8"),
+        border=_borde(1, "#F3C8E8"),
         content=ft.Column([
-            ft.Row([ft.Text("Pedidos por cobrar", size=17, weight="bold"), ft.Container(expand=True), ft.Icon(ICON_PAYMENT, color="#C86DD7")]),
+            _titulo_seccion("Pedidos por cobrar", ICON_PAYMENT),
             pedidos_list,
-        ], spacing=12, expand=True),
+        ], spacing=12),
     )
 
     preparacion_panel = ft.Container(
-        expand=True,
         bgcolor="#FBF7FF",
-        border_radius=22,
+        border_radius=20,
         padding=14,
-        border=ft.border.all(1, "#D9B8F0"),
+        border=_borde(1, "#D9B8F0"),
         content=ft.Column([
-            ft.Row([ft.Text("Pedidos en preparación", size=17, weight="bold"), ft.Container(expand=True), ft.Icon(ICON_LIST, color="#C86DD7")]),
+            _titulo_seccion("Pedidos en preparación", ICON_KITCHEN),
             preparacion_list,
-        ], spacing=12, expand=True),
+        ], spacing=12),
     )
 
     tabla_wrap = ft.Container(
-        height=280,
         bgcolor="white",
-        border_radius=22,
+        border_radius=20,
         padding=14,
-        border=ft.border.all(1, "#F0D8F5"),
+        border=_borde(1, BORDE),
         content=ft.Column([
-            ft.Text("Movimientos recientes", size=15, weight="bold"),
-            ft.Text(f"Corte actual #{corte_id if corte_id else '—'} · últimos 30", size=11, color="#6B7280"),
-            ft.Row([ft.Container(content=tabla, padding=6)], scroll=ft.ScrollMode.AUTO, expand=True),
-        ], spacing=6, expand=True),
+            _titulo_seccion(
+                "Movimientos recientes",
+                ICON_LIST,
+                extra=ft.TextButton("Ver todo", on_click=abrir_historial_movimientos),
+            ),
+            ft.Text(f"Corte actual #{corte_id if corte_id else '—'} · últimos 30", size=11, color=TEXTO_SUAVE),
+            tabla,
+        ], spacing=8),
     )
 
-    # Columna izquierda: los dos flujos de pedidos, apilados uno sobre otro
-    # (antes competían por el mismo ancho junto al formulario y todo se veía
-    # apretado). Columna derecha: el formulario y los movimientos recientes
-    # (este último estaba definido pero nunca se mostraba en pantalla).
+    # Escritorio: pedidos a la izquierda, formulario y movimientos a la
+    # derecha. Celular: todo apilado en una sola columna con scroll.
     columna_pedidos = ft.Column(
         [pedidos_panel, preparacion_panel],
         spacing=16,
-        expand=3,
+        col={"xs": 12, "lg": 7},
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
     )
     columna_lateral = ft.Column(
         [formulario, tabla_wrap],
         spacing=16,
-        expand=2,
+        col={"xs": 12, "lg": 5},
         horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
     )
 
     main_content = ft.Container(
         expand=True,
-        bgcolor="#F9F6FB",
-        padding=20,
+        bgcolor=FONDO,
+        padding=12 if es_movil else 20,
         content=ft.Column([
             header,
             resumen_row,
-            lbl_nota_balance,
-            ft.Row([columna_pedidos, columna_lateral], spacing=16, expand=True, wrap=False),
+            nota_balance,
+            ft.ResponsiveRow(
+                [columna_pedidos, columna_lateral],
+                spacing=16,
+                run_spacing=16,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            ),
         ], spacing=16, expand=True, scroll=ft.ScrollMode.AUTO),
     )
 
     recargar_todo()
 
-    layout = ft.Row([sidebar, main_content], expand=True)
+    layout = ft.Row([sidebar, main_content], expand=True, spacing=0)
     appbar = ft.AppBar(
         leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_pos),
         title=ft.Text("Caja chica"),
-        bgcolor="#C86DD7",
+        bgcolor=LILA,
         color="white",
         automatically_imply_leading=False,
     )

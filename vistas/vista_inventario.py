@@ -39,6 +39,56 @@ ICON_LOGOUT = _icon("LOGOUT", "EXIT_TO_APP")
 ICON_EDIT = _icon("EDIT", "EDIT_OUTLINED", "MODE_EDIT")
 ICON_DELETE = _icon("DELETE", "DELETE_OUTLINED", "REMOVE_CIRCLE_OUTLINE")
 ICON_BACK = _icon("ARROW_BACK", "ARROW_BACK_IOS", "KEYBOARD_ARROW_LEFT")
+ICON_WARNING = _icon("WARNING_AMBER", "WARNING_AMBER_ROUNDED", "WARNING")
+ICON_EVENT = _icon("EVENT", "CALENDAR_TODAY", "SCHEDULE")
+ICON_REMOVE_SHOP = _icon("REMOVE_SHOPPING_CART", "PRODUCTION_QUANTITY_LIMITS", "BLOCK")
+ICON_INBOX = _icon("INBOX", "SEARCH_OFF")
+ICON_LABEL = _icon("SELL", "LABEL_OUTLINE", "LOCAL_OFFER")
+
+# ------------------------------------------------------------
+# Paleta y helpers visuales
+# ------------------------------------------------------------
+# ft.padding.symmetric / ft.border.all no existen en Flet 0.8x;
+# ft.Padding, ft.Border y ft.Alignment sí existen en todas las versiones.
+LILA = "#C86DD7"
+LILA_SUAVE = "#F5EEFA"
+FONDO = "#F9F6FB"
+TEXTO = "#3A2E42"
+TEXTO_SUAVE = "#7A6C85"
+BORDE = "#EADCF0"
+VERDE, VERDE_SUAVE = "#16A34A", "#DCFCE7"
+AMBAR, AMBAR_SUAVE = "#B45309", "#FEF3C7"
+ROJO, ROJO_SUAVE = "#DC2626", "#FEE2E2"
+
+# Umbrales solo para colorear las tarjetas (no cambian ninguna regla).
+STOCK_BAJO = 5
+DIAS_POR_CADUCAR = 7
+
+
+def _pad(left=0, top=0, right=0, bottom=0):
+    return ft.Padding(left=left, top=top, right=right, bottom=bottom)
+
+
+def _pad_sim(horizontal=0, vertical=0):
+    return _pad(horizontal, vertical, horizontal, vertical)
+
+
+def _borde(ancho=1, color=BORDE):
+    lado = ft.BorderSide(ancho, color)
+    return ft.Border(top=lado, right=lado, bottom=lado, left=lado)
+
+
+def _pastilla(texto: str, color: str, fondo: str, icono=None):
+    partes = []
+    if icono is not None:
+        partes.append(ft.Icon(icono, size=13, color=color))
+    partes.append(ft.Text(texto, size=11, weight=ft.FontWeight.BOLD, color=color))
+    return ft.Container(
+        padding=_pad_sim(9, 4),
+        border_radius=999,
+        bgcolor=fondo,
+        content=ft.Row(partes, spacing=4, tight=True, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+    )
 
 # ------------------------------------------------------------
 # Helpers
@@ -168,6 +218,15 @@ def _validar_entero_positivo(valor: str, nombre_campo: str):
     if numero <= 0:
         return False, f"{nombre_campo} debe ser mayor a 0", None
     return True, None, numero
+
+
+def _dias_para_caducar(value):
+    """Días que faltan para la fecha de caducidad (negativo = ya caducó)."""
+    try:
+        fecha = datetime.strptime(_fmt_fecha(value), "%Y-%m-%d").date()
+        return (fecha - datetime.now().date()).days
+    except Exception:
+        return None
 
 
 def _fmt_fecha(value) -> str:
@@ -392,7 +451,7 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
     ancho_dialogo = min(460, ancho_pagina - 48)
     ancho_campo = ancho_dialogo - 30
 
-    page.bgcolor = "#EFEAF2"
+    page.bgcolor = FONDO
 
     def volver_pos(e=None):
         if len(page.views) > 1:
@@ -436,53 +495,96 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
         cerrar_sesion_real=cerrar_sesion,
     )
 
-    lbl_estado = ft.Text("Registros: 0", size=12, color="#6B7280")
+    lbl_estado = ft.Text("Registros: 0", size=12, color=TEXTO_SUAVE)
     lbl_debug = ft.Text(
         f"Corte actual: {corte_id if corte_id else 'sin corte'} | Filtrar por corte: No",
         size=11,
-        color="#6B7280",
+        color=TEXTO_SUAVE,
     )
 
-    chk_solo_corte = ft.Checkbox(label="Solo mi corte", value=False)
+    chk_solo_corte = ft.Checkbox(label="Solo mi corte", value=False, active_color=LILA)
 
+    # Sin ancho fijo: el buscador ocupa la columna que le toque.
     txt_buscar = ft.TextField(
         label="Buscar producto",
         hint_text="Nombre, marca o descripción",
         border_radius=12,
-        width=280,
+        border_color=BORDE,
+        focused_border_color=LILA,
+        bgcolor="white",
         prefix_icon=ICON_SEARCH,
+        expand=True,
     )
 
     btn_limpiar = ft.IconButton(
         icon=ICON_CLEAR,
         tooltip="Limpiar búsqueda",
+        icon_color=TEXTO_SUAVE,
     )
 
     btn_nuevo = ft.ElevatedButton(
         "Nuevo producto",
         icon=ICON_ADD,
-        bgcolor="#C06CD8",
+        bgcolor=LILA,
         color="white",
+        expand=True,
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=14), padding=_pad_sim(18, 16)),
     )
 
-    tabla = ft.DataTable(
-        columns=[
-            ft.DataColumn(ft.Text("ID")),
-            ft.DataColumn(ft.Text("Nombre")),
-            ft.DataColumn(ft.Text("Precio")),
-            ft.DataColumn(ft.Text("FechaCaducidad")),
-            ft.DataColumn(ft.Text("Descripción")),
-            ft.DataColumn(ft.Text("Marca")),
-            ft.DataColumn(ft.Text("UnidadMedida")),
-            ft.DataColumn(ft.Text("Stock")),
-            ft.DataColumn(ft.Text("Acciones")),
-        ],
-        rows=[],
-        column_spacing=18,
-        heading_row_height=48,
-        data_row_min_height=56,
-        divider_thickness=0.5,
-    )
+    # Antes era un DataTable de 9 columnas sobre fondo gris: en el celular
+    # solo se veían ID, nombre y precio, y había que arrastrar de lado para
+    # llegar al stock y a los botones. Ahora cada producto es una tarjeta:
+    # una columna en el celular, dos o tres en pantallas anchas.
+    tabla = ft.ResponsiveRow(spacing=12, run_spacing=12)
+
+    # Resumen rápido arriba de la lista.
+    kpi_total = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=LILA)
+    kpi_sin_stock = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=ROJO)
+    kpi_bajo = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color=AMBAR)
+    kpi_caducar = ft.Text("0", size=22, weight=ft.FontWeight.BOLD, color="#2563EB")
+
+    def _tarjeta_kpi(titulo, valor_ctrl, icono, color, fondo):
+        return ft.Container(
+            col={"xs": 6, "md": 3},
+            bgcolor="white",
+            border_radius=18,
+            padding=14,
+            border=_borde(1, BORDE),
+            content=ft.Column(
+                [
+                    ft.Container(
+                        width=32,
+                        height=32,
+                        border_radius=10,
+                        bgcolor=fondo,
+                        alignment=ft.Alignment(0, 0),
+                        content=ft.Icon(icono, size=18, color=color),
+                    ),
+                    ft.Text(titulo, size=12, color=TEXTO_SUAVE),
+                    valor_ctrl,
+                ],
+                spacing=4,
+            ),
+        )
+
+    def actualizar_resumen(lista):
+        sin_stock = bajo = por_caducar = 0
+        for p in lista:
+            try:
+                cantidad = float(p.get("Cantidad", 0) or 0)
+            except Exception:
+                cantidad = 0
+            if cantidad <= 0:
+                sin_stock += 1
+            elif cantidad <= STOCK_BAJO:
+                bajo += 1
+            dias = _dias_para_caducar(p.get("FechaCaducidad"))
+            if dias is not None and dias <= DIAS_POR_CADUCAR:
+                por_caducar += 1
+        kpi_total.value = str(len(lista))
+        kpi_sin_stock.value = str(sin_stock)
+        kpi_bajo.value = str(bajo)
+        kpi_caducar.value = str(por_caducar)
 
     def recargar(e=None):
         nonlocal productos_cache
@@ -493,6 +595,7 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
             )
             lbl_estado.value = f"Registros: {len(productos_cache)}"
             lbl_debug.value = f"Corte actual: {corte_id if corte_id else 'sin corte'} | Filtrar por corte: {'Sí' if chk_solo_corte.value else 'No'}"
+            actualizar_resumen(productos_cache)
         except Exception as ex:
             productos_cache = []
             lbl_estado.value = "Registros: 0"
@@ -522,62 +625,147 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
     chk_solo_corte.on_change = recargar
     btn_limpiar.on_click = limpiar_busqueda
 
-    def pintar_tabla(lista):
-        tabla.rows = []
+    def crear_tarjeta_producto(p):
+        try:
+            cantidad = float(p.get("Cantidad", 0) or 0)
+        except Exception:
+            cantidad = 0
+        cantidad_txt = str(int(cantidad) if float(cantidad).is_integer() else cantidad)
+        unidad = str(p.get("UnidadMedida", "") or "").strip()
 
-        for p in lista:
-            try:
-                cantidad = float(p.get("Cantidad", 0) or 0)
-            except Exception:
-                cantidad = 0
+        if cantidad <= 0:
+            stock = _pastilla("SIN STOCK", ROJO, ROJO_SUAVE, ICON_REMOVE_SHOP)
+            borde = "#F5C2C2"
+        elif cantidad <= STOCK_BAJO:
+            stock = _pastilla(f"Stock bajo: {cantidad_txt} {unidad}".strip(), AMBAR, AMBAR_SUAVE, ICON_WARNING)
+            borde = "#F6DFA8"
+        else:
+            stock = _pastilla(f"Stock: {cantidad_txt} {unidad}".strip(), VERDE, VERDE_SUAVE, ICON_BOX)
+            borde = BORDE
 
-            sin_stock = cantidad <= 0
-            stock_widget = ft.Row(
-                spacing=8,
-                controls=[
-                    ft.Text(
-                        str(int(cantidad) if float(cantidad).is_integer() else cantidad),
-                        weight="bold" if sin_stock else None,
+        dias = _dias_para_caducar(p.get("FechaCaducidad"))
+        fecha_txt = _fmt_fecha(p.get("FechaCaducidad", ""))
+        if dias is not None and dias < 0:
+            caducidad = _pastilla(f"Caducó {fecha_txt}", ROJO, ROJO_SUAVE, ICON_EVENT)
+        elif dias is not None and dias <= DIAS_POR_CADUCAR:
+            caducidad = _pastilla(f"Caduca {fecha_txt}", AMBAR, AMBAR_SUAVE, ICON_EVENT)
+        else:
+            caducidad = _pastilla(f"Caduca {fecha_txt}", TEXTO_SUAVE, "#F3EEF6", ICON_EVENT)
+
+        def editar_click(e, prod=p):
+            abrir_dialogo_editar(prod)
+
+        def eliminar_click(e, prod_id=p.get("IdProductos")):
+            confirmar_eliminar(prod_id)
+
+        try:
+            precio_txt = f"$ {float(p.get('Precio') or 0):,.2f}"
+        except Exception:
+            precio_txt = str(p.get("Precio", ""))
+
+        marca = str(p.get("Marca", "") or "").strip()
+        detalle = " · ".join(x for x in [marca, unidad] if x)
+
+        return ft.Container(
+            col={"xs": 12, "md": 6, "xl": 4},
+            bgcolor="white",
+            border_radius=18,
+            padding=14,
+            border=_borde(1, borde),
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Container(
+                                width=40,
+                                height=40,
+                                border_radius=12,
+                                bgcolor=LILA_SUAVE,
+                                alignment=ft.Alignment(0, 0),
+                                content=ft.Icon(ICON_BOX, size=20, color=LILA),
+                            ),
+                            ft.Column(
+                                [
+                                    ft.Text(
+                                        str(p.get("Nombre", "")),
+                                        size=15,
+                                        weight=ft.FontWeight.BOLD,
+                                        color=TEXTO,
+                                        max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                    ft.Text(
+                                        f"#{p.get('IdProductos', '')}" + (f" · {detalle}" if detalle else ""),
+                                        size=12,
+                                        color=TEXTO_SUAVE,
+                                        max_lines=1,
+                                        overflow=ft.TextOverflow.ELLIPSIS,
+                                    ),
+                                ],
+                                spacing=1,
+                                expand=True,
+                            ),
+                            ft.Text(precio_txt, size=16, weight=ft.FontWeight.BOLD, color=LILA),
+                        ],
+                        spacing=10,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    ft.Container(
-                        visible=sin_stock,
-                        padding=ft.padding.symmetric(horizontal=8, vertical=3),
-                        bgcolor="#FFE08A",
-                        border_radius=12,
-                        content=ft.Text("SIN STOCK", size=10, weight="bold"),
+                    ft.Text(
+                        str(p.get("Descripcion", "") or "Sin descripción"),
+                        size=13,
+                        color="#4B4453",
+                        max_lines=2,
+                        overflow=ft.TextOverflow.ELLIPSIS,
+                    ),
+                    ft.Row([stock, caducidad], spacing=6, run_spacing=6, wrap=True),
+                    ft.Divider(height=1, color=BORDE),
+                    ft.Row(
+                        [
+                            ft.TextButton("Editar", icon=ICON_EDIT, on_click=editar_click),
+                            ft.TextButton(
+                                "Eliminar",
+                                icon=ICON_DELETE,
+                                on_click=eliminar_click,
+                                style=ft.ButtonStyle(color=ROJO),
+                            ),
+                        ],
+                        spacing=4,
+                        alignment=ft.MainAxisAlignment.END,
                     ),
                 ],
-            )
+                spacing=10,
+            ),
+        )
 
-            def editar_click(e, prod=p):
-                abrir_dialogo_editar(prod)
-
-            def eliminar_click(e, prod_id=p.get("IdProductos")):
-                confirmar_eliminar(prod_id)
-
-            tabla.rows.append(
-                ft.DataRow(
-                    cells=[
-                        ft.DataCell(ft.Text(str(p.get("IdProductos", "")))),
-                        ft.DataCell(ft.Text(str(p.get("Nombre", "")))),
-                        ft.DataCell(ft.Text(str(p.get("Precio", "")))),
-                        ft.DataCell(ft.Text(_fmt_fecha(p.get("FechaCaducidad", "")))),
-                        ft.DataCell(ft.Text(str(p.get("Descripcion", "")), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
-                        ft.DataCell(ft.Text(str(p.get("Marca", "")))),
-                        ft.DataCell(ft.Text(str(p.get("UnidadMedida", "")))),
-                        ft.DataCell(stock_widget),
-                        ft.DataCell(
-                            ft.Row(
-                                spacing=0,
-                                controls=[
-                                    ft.IconButton(icon=ICON_EDIT, tooltip="Editar", on_click=editar_click),
-                                    ft.IconButton(icon=ICON_DELETE, tooltip="Eliminar", on_click=eliminar_click),
-                                ],
-                            )
-                        ),
-                    ]
+    def pintar_tabla(lista):
+        if lista:
+            tabla.controls = [crear_tarjeta_producto(p) for p in lista]
+        else:
+            buscando = bool(_normalizar_texto(txt_buscar.value))
+            tabla.controls = [
+                ft.Container(
+                    col={"xs": 12},
+                    padding=30,
+                    border_radius=18,
+                    bgcolor="white",
+                    border=_borde(1, BORDE),
+                    alignment=ft.Alignment(0, 0),
+                    content=ft.Column(
+                        [
+                            ft.Icon(ICON_INBOX, size=36, color=TEXTO_SUAVE),
+                            ft.Text(
+                                "Ningún producto coincide con la búsqueda." if buscando else "No hay productos registrados.",
+                                size=13,
+                                color=TEXTO_SUAVE,
+                                text_align=ft.TextAlign.CENTER,
+                            ),
+                        ],
+                        spacing=6,
+                        tight=True,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
                 )
-            )
+            ]
 
         page.update()
 
@@ -709,7 +897,7 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: _close_dialog(page, dlg)),
-            ft.ElevatedButton("Guardar", bgcolor="#C06CD8", color="white", on_click=guardar),
+            ft.ElevatedButton("Guardar", bgcolor=LILA, color="white", on_click=guardar),
         ]
         dlg.actions_alignment = ft.MainAxisAlignment.END
         _open_dialog(page, dlg)
@@ -809,7 +997,7 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: _close_dialog(page, dlg)),
-            ft.ElevatedButton("Guardar", bgcolor="#C06CD8", color="white", on_click=guardar),
+            ft.ElevatedButton("Guardar", bgcolor=LILA, color="white", on_click=guardar),
         ]
         dlg.actions_alignment = ft.MainAxisAlignment.END
         _open_dialog(page, dlg)
@@ -837,78 +1025,73 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
         dlg.actions_alignment = ft.MainAxisAlignment.END
         _open_dialog(page, dlg)
 
-    header = ft.Container(
-        content=ft.Column(
-            spacing=10,
-            controls=[
-                ft.Row(
-                    controls=[
-                        ft.Column(
-                            spacing=2,
-                            controls=[
-                                ft.Text("Inventario", size=24, weight="bold", color="#C06CD8"),
-                                lbl_estado,
-                                lbl_debug,
-                            ],
-                        ),
-                    ],
-                ),
-                ft.Row(
-                    wrap=True,
-                    spacing=8,
-                    run_spacing=8,
-                    controls=[
-                        chk_solo_corte,
-                        txt_buscar,
-                        btn_limpiar,
-                        btn_nuevo,
-                    ],
-                ),
-            ],
-        )
+    header = ft.Column(
+        spacing=4,
+        controls=[
+            ft.Text("Inventario", size=24, weight=ft.FontWeight.BOLD, color=LILA),
+            ft.Row([lbl_estado, lbl_debug], spacing=10, run_spacing=2, wrap=True),
+        ],
     )
 
-    table_like = ft.Container(
-        expand=True,
-        bgcolor="#D0D0D0",
-        border_radius=0,
+    resumen = ft.ResponsiveRow(
+        [
+            _tarjeta_kpi("Productos", kpi_total, ICON_BOX, LILA, LILA_SUAVE),
+            _tarjeta_kpi("Sin stock", kpi_sin_stock, ICON_REMOVE_SHOP, ROJO, ROJO_SUAVE),
+            _tarjeta_kpi(f"Stock bajo ({STOCK_BAJO} o menos)", kpi_bajo, ICON_WARNING, AMBAR, AMBAR_SUAVE),
+            _tarjeta_kpi(f"Caducan en {DIAS_POR_CADUCAR} días o menos", kpi_caducar, ICON_EVENT, "#2563EB", "#DBEAFE"),
+        ],
+        spacing=12,
+        run_spacing=12,
+    )
+
+    # Barra de herramientas: el buscador arriba a todo lo ancho en el
+    # celular; filtro y "Nuevo producto" abajo.
+    barra = ft.Container(
+        bgcolor="white",
+        border_radius=18,
         padding=12,
-        content=ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            controls=[
-                ft.Row(
-                    scroll=ft.ScrollMode.AUTO,
-                    controls=[tabla],
-                )
+        border=_borde(1, BORDE),
+        content=ft.ResponsiveRow(
+            [
+                ft.Row([txt_buscar, btn_limpiar], spacing=4, col={"xs": 12, "md": 6}),
+                ft.Container(content=chk_solo_corte, col={"xs": 12, "sm": 5, "md": 3}),
+                ft.Container(content=btn_nuevo, col={"xs": 12, "sm": 7, "md": 3}),
             ],
+            spacing=12,
+            run_spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
         ),
     )
 
     main_content = ft.Container(
         expand=True,
-        bgcolor="#F5F2F7",
-        padding=20,
+        bgcolor=FONDO,
+        padding=12 if es_movil else 20,
         content=ft.Column(
             expand=True,
-            spacing=10,
+            spacing=14,
+            scroll=ft.ScrollMode.AUTO,
             controls=[
                 header,
-                table_like,
+                resumen,
+                barra,
+                tabla,
             ],
         ),
     )
 
     layout = ft.Row(
         expand=True,
+        spacing=0,
         controls=[sidebar, main_content],
     )
 
     appbar = ft.AppBar(
-        leading=ft.IconButton(icon=ICON_BACK, on_click=volver_pos),
-        title=ft.Text("Corallie Bubble - Inventario"),
-        bgcolor="#C06CD8",
+        leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_pos),
+        title=ft.Text("Inventario"),
+        bgcolor=LILA,
         color="white",
+        automatically_imply_leading=False,
     )
 
     recargar()
