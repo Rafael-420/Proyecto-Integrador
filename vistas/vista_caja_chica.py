@@ -3,7 +3,7 @@ import re
 from datetime import datetime
 
 from configuracion.base_datos import get_connection
-from componentes.sidebar import build_sidebar
+from componentes.sidebar import build_sidebar, sidebar_layout
 from servicios.servicio_menu import (
     ESTATUS_NO_RECOGIDO,
     ESTATUS_PEDIDO_REALIZADO,
@@ -1629,7 +1629,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         page.views.append(
             ft.View(
                 route="/historial_movimientos",
-                controls=[ft.Row([sidebar_historial, contenido_historial], expand=True, spacing=0)],
+                controls=[sidebar_layout(page, sidebar_historial, contenido_historial, espaciado=0)],
                 appbar=ft.AppBar(
                     leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_caja),
                     title=ft.Text("Historial de movimientos"),
@@ -1792,7 +1792,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
 
     recargar_todo()
 
-    layout = ft.Row([sidebar, main_content], expand=True, spacing=0)
+    layout = sidebar_layout(page, sidebar, main_content, espaciado=0)
     appbar = ft.AppBar(
         leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_pos),
         title=ft.Text("Caja chica"),

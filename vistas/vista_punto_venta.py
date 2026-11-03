@@ -1,5 +1,5 @@
 import flet as ft
-from componentes.sidebar import build_sidebar
+from componentes.sidebar import build_sidebar, sidebar_layout
 
 # Compatibilidad íconos (Flet nuevo)
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -147,13 +147,7 @@ def punto_venta_view(page: ft.Page, nombre: str) -> ft.View:
         ),
     )
 
-    layout = ft.Row(
-        [
-            sidebar,
-            main_content,
-        ],
-        expand=True,
-    )
+    layout = sidebar_layout(page, sidebar, main_content)
 
     # ------------------------------------------------------------------
     # APPBAR (SIN ICONO LATERAL, YA TENEMOS SIDEBAR FIJO)

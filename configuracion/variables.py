@@ -61,6 +61,23 @@ DB_USAR_POOL = _leer_bool("DB_USAR_POOL", True)
 DB_POOL_SIZE = _leer_int("DB_POOL_SIZE", 5)
 DB_TIMEOUT = _leer_int("DB_TIMEOUT", 10)
 
+# Tiempo máximo (segundos) para la verificación rápida de conexión que
+# hace el login. Es más corto que DB_TIMEOUT para que, sin internet, la
+# pantalla de "Sin conexión" aparezca en segundos y no se congele.
+DB_TIMEOUT_VERIFICACION = _leer_int("DB_TIMEOUT_VERIFICACION", 5)
+
+
+# ------------------------------------------------------------
+# Señal de la caja ("sigo aquí")
+# ------------------------------------------------------------
+# Mientras un empleado tiene la caja abierta, la aplicación avisa a la
+# base de datos cada SEGUNDOS_ENTRE_SENALES. Si el último aviso tiene
+# más de MINUTOS_SENAL_CAJA, se entiende que el local se quedó sin
+# internet (o que nadie atiende la caja) y el menú de clientes deja de
+# aceptar pedidos. Con MINUTOS_SENAL_CAJA=0 la regla se desactiva.
+SEGUNDOS_ENTRE_SENALES = _leer_int("CORALLIE_SEGUNDOS_ENTRE_SENALES", 60)
+MINUTOS_SENAL_CAJA = _leer_int("CORALLIE_MINUTOS_SENAL_CAJA", 3)
+
 
 # ------------------------------------------------------------
 # Correo (envio de credenciales)

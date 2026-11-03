@@ -8,7 +8,11 @@ from io import BytesIO
 
 import flet as ft
 from configuracion.base_datos import get_connection
-from componentes.sidebar_admin import build_admin_sidebar
+from componentes.appbar_admin import build_admin_appbar
+from componentes.layout_sidebar import es_pantalla_angosta
+from componentes.sidebar_admin import admin_layout, build_admin_sidebar
+from componentes.tabla_reporte import Celda, ColumnaReporte, tabla_reporte
+from utilidades.flet_compat import set_error
 
 # ============================================================
 # Compatibilidad Flet
@@ -40,6 +44,15 @@ ICON_SEARCH = _icon("SEARCH", "SEARCH_OUTLINED", "MANAGE_SEARCH")
 ICON_REFRESH = _icon("REFRESH", "SYNC")
 ICON_DOWNLOAD = _icon("DOWNLOAD", "FILE_DOWNLOAD", "PICTURE_AS_PDF")
 ICON_AI = _icon("AUTO_AWESOME", "INSIGHTS", "PSYCHOLOGY")
+ICON_TOP = _icon("EMOJI_EVENTS", "STAR", "TRENDING_UP")
+ICON_FORECAST = _icon("INVENTORY", "INVENTORY_2", "LOCAL_SHIPPING")
+ICON_STOCK = _icon("WARNING_AMBER", "WARNING", "REPORT")
+ICON_DETAIL = _icon("RECEIPT_LONG", "LIST_ALT", "LIST")
+
+# Colores de estado (texto, fondo de la etiqueta)
+ESTADO_CRITICO = ("#B91C1C", "#FEE2E2")
+ESTADO_BAJO = ("#B45309", "#FEF3C7")
+ESTADO_CORRECTO = ("#15803D", "#DCFCE7")
 
 # ============================================================
 # PDF opcional
@@ -583,6 +596,7 @@ def create_pdf_bytes(nombre, filters, rows, inventory, metrics, insights):
 # ============================================================
 def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.View:
     page.bgcolor = "#F9F6FB"
+    es_movil = es_pantalla_angosta(page)
 
     def open_dialog(ctrl):
         try:
@@ -650,8 +664,8 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     fecha_fin = ft.TextField(label="Fecha fin", value=end_default, expand=True, border_radius=12, hint_text="YYYY-MM-DD")
     dd_empleado = ft.Dropdown(label="Empleado", expand=True, border_radius=12, options=fetch_employee_options(), value="")
     txt_producto = ft.TextField(label="Producto contiene", expand=True, border_radius=12, prefix_icon=ICON_SEARCH)
-    txt_total_min = ft.TextField(label="Total mínimo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
-    txt_total_max = ft.TextField(label="Total máximo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
+    txt_total_min = ft.TextField(label="Total mín." if es_movil else "Total mínimo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
+    txt_total_max = ft.TextField(label="Total máx." if es_movil else "Total máximo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
     dd_orden = ft.Dropdown(
         label="Ordenar por",
         expand=True,
@@ -666,12 +680,15 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     )
 
     txt_estado = ft.Text("", size=12, color="#6B7280")
-    stat_sales = ft.Text("0", size=25, weight="bold", color="#C86DD7")
-    stat_income = ft.Text(money(0), size=25, weight="bold", color="#C86DD7")
-    stat_avg = ft.Text(money(0), size=25, weight="bold", color="#C86DD7")
-    stat_stock = ft.Text("0", size=25, weight="bold", color="#C86DD7")
-    stat_entries = ft.Text("0", size=25, weight="bold", color="#C86DD7")
-    stat_outputs = ft.Text("0", size=25, weight="bold", color="#C86DD7")
+    # En el celular la tarjeta mide ~150 px: con 20 px "$ 1,566.00" se
+    # partía en dos renglones.
+    tamano_kpi = 17 if es_movil else 25
+    stat_sales = ft.Text("0", size=tamano_kpi, weight="bold", color="#C86DD7")
+    stat_income = ft.Text(money(0), size=tamano_kpi, weight="bold", color="#C86DD7")
+    stat_avg = ft.Text(money(0), size=tamano_kpi, weight="bold", color="#C86DD7")
+    stat_stock = ft.Text("0", size=tamano_kpi, weight="bold", color="#C86DD7")
+    stat_entries = ft.Text("0", size=tamano_kpi, weight="bold", color="#C86DD7")
+    stat_outputs = ft.Text("0", size=tamano_kpi, weight="bold", color="#C86DD7")
 
     insight_summary = ft.Text("Genera el reporte para analizar ventas, pedidos e inventario.", size=14, color="#374151")
     insight_peak = ft.Text("Hora pico: Sin datos", size=14, color="#374151", weight="bold")
@@ -685,20 +702,22 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     last_report = {"rows": [], "inventory": {"stock": [], "entradas": [], "salidas": []}, "metrics": {}, "insights": {}, "filters": {}}
 
     def kpi_card(title, value_control):
+        # En el celular van de dos en dos (antes una por renglón: seis
+        # tarjetas a todo lo ancho antes de llegar al análisis).
         return ft.Container(
             bgcolor="white",
             border_radius=22,
-            padding=ft.padding.symmetric(horizontal=20, vertical=16),
+            padding=ft.padding.symmetric(horizontal=14 if es_movil else 20, vertical=14 if es_movil else 16),
             border=ft.border.all(1, "#EFCDF7"),
-            col={"xs": 12, "sm": 6, "md": 4, "lg": 2},
-            content=ft.Column([ft.Text(title, size=13, color="#6B7280"), value_control], spacing=8),
+            col={"xs": 6, "md": 4, "lg": 2},
+            content=ft.Column([ft.Text(title, size=12 if es_movil else 13, color="#6B7280"), value_control], spacing=6),
         )
 
     def section(title, subtitle, child):
         return ft.Container(
             bgcolor="white",
             border_radius=24,
-            padding=18,
+            padding=14 if es_movil else 18,
             border=ft.border.all(1, "#F0D7F7"),
             content=ft.Column([
                 ft.Text(title, size=18, weight="bold", color="#333333"),
@@ -715,35 +734,18 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             content=ft.Text(text, size=13, color="#6B7280"),
         )
 
-    def make_table(columns, rows):
-        if not rows:
-            return empty_message("Sin registros para mostrar en este rango.")
-        return ft.Container(
-            bgcolor="white",
-            border_radius=12,
-            content=ft.Row([
-                ft.DataTable(
-                    columns=[ft.DataColumn(ft.Text(c, weight="bold")) for c in columns],
-                    rows=rows,
-                    heading_row_color="#F3E9F7",
-                    data_row_min_height=50,
-                    data_row_max_height=90,
-                    column_spacing=18,
-                    border_radius=12,
-                )
-            ], scroll=ft.ScrollMode.AUTO),
-        )
-
     def validate_filters():
+        # set_error en lugar de .error_text: en Flet 0.80 error_text ya no
+        # se dibuja en los TextField y los errores de filtro no se veían.
         for f in [fecha_inicio, fecha_fin, txt_total_min, txt_total_max]:
-            f.error_text = None
+            set_error(f, None)
         ok_ini, msg_ini, start_obj = parse_date_text(fecha_inicio.value)
         ok_fin, msg_fin, end_obj = parse_date_text(fecha_fin.value)
         ok = ok_ini and ok_fin
         if not ok_ini:
-            fecha_inicio.error_text = msg_ini
+            set_error(fecha_inicio, msg_ini)
         if not ok_fin:
-            fecha_fin.error_text = msg_fin
+            set_error(fecha_fin, msg_fin)
         min_v = None
         max_v = None
         for field, label in [(txt_total_min, "Total mínimo"), (txt_total_max, "Total máximo")]:
@@ -757,15 +759,15 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
                     else:
                         max_v = val
                 except Exception:
-                    field.error_text = f"{label} inválido"
+                    set_error(field, f"{label} inválido")
                     ok = False
         if min_v is not None and max_v is not None and min_v > max_v:
-            txt_total_min.error_text = "Debe ser menor"
-            txt_total_max.error_text = "Debe ser mayor"
+            set_error(txt_total_min, "Debe ser menor")
+            set_error(txt_total_max, "Debe ser mayor")
             ok = False
         if ok and start_obj > end_obj:
-            fecha_inicio.error_text = "Debe ser anterior o igual"
-            fecha_fin.error_text = "Debe ser posterior o igual"
+            set_error(fecha_inicio, "Debe ser anterior o igual")
+            set_error(fecha_fin, "Debe ser posterior o igual")
             ok = False
         return ok, start_obj, end_obj
 
@@ -792,51 +794,103 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             for rec in insights.get("recommendations", [])
         ]
 
-        top_rows = []
-        for item in insights.get("top_products", []):
-            top_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(compact_text(item["name"], 32))),
-                ft.DataCell(ft.Text(str(item["orders"]))),
-                ft.DataCell(ft.Text(str(item["units"]))),
-                ft.DataCell(ft.Text(money(item["income"]))),
-            ]))
-        top_box.controls = [make_table(["Producto", "Órdenes", "Unidades", "Ingreso"], top_rows)]
+        # ---------------- Más vendidos ----------------
+        top = insights.get("top_products", [])
+        max_unidades = max([safe_float(t.get("units")) for t in top] or [0]) or 1
+        top_box.controls = [tabla_reporte(
+            page,
+            [
+                ColumnaReporte("#", flex=1, alinear="der", en_movil=False),
+                ColumnaReporte("Producto", flex=6, principal=True),
+                ColumnaReporte("Órdenes", flex=2, alinear="der"),
+                ColumnaReporte("Unidades", flex=2, alinear="der"),
+                ColumnaReporte("Ingreso", flex=3, alinear="der", destacada=True),
+            ],
+            [
+                [
+                    Celda(f"{pos}", color="#7A6C85", negrita=True),
+                    Celda(compact_text(item["name"], 40), negrita=True,
+                          barra=safe_float(item["units"]) / max_unidades),
+                    str(item["orders"]),
+                    str(item["units"]),
+                    Celda(money(item["income"]), negrita=True),
+                ]
+                for pos, item in enumerate(top, start=1)
+            ],
+        )]
 
-        forecast_rows = []
+        # ---------------- Reabastecimiento ----------------
+        forecast_filas = []
         for item in insights.get("forecast", []):
             need = int(item["suggested_restock"])
-            forecast_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(compact_text(item["name"], 32))),
-                ft.DataCell(ft.Text(str(item["weekly_units"]))),
-                ft.DataCell(ft.Text(str(int(item["current_stock"])))),
-                ft.DataCell(ft.Text(str(need), color="#C62828" if need > 0 else "#2E7D32", weight="bold")),
-            ]))
-        forecast_box.controls = [make_table(["Producto", "Demanda 7 días", "Stock", "Reabastecer"], forecast_rows)]
+            color, fondo = ESTADO_CRITICO if need > 0 else ESTADO_CORRECTO
+            forecast_filas.append([
+                Celda(compact_text(item["name"], 40), negrita=True),
+                str(item["weekly_units"]),
+                str(int(item["current_stock"])),
+                Celda(f"+{need}" if need > 0 else "Suficiente", color=color, fondo=fondo),
+            ])
+        forecast_box.controls = [tabla_reporte(
+            page,
+            [
+                ColumnaReporte("Producto", flex=5, principal=True),
+                ColumnaReporte("Demanda 7 días", flex=2, alinear="der"),
+                ColumnaReporte("Stock", flex=2, alinear="der"),
+                ColumnaReporte("Reabastecer", flex=2, alinear="der", destacada=True),
+            ],
+            forecast_filas,
+        )]
 
-        stock_rows = []
-        for s in inventory.get("stock", [])[:40]:
-            qty = safe_float(s.get("Cantidad"))
-            estado = "Crítico" if qty <= 0 else "Bajo" if qty <= 5 else "Correcto"
-            color = "#C62828" if qty <= 0 else "#F57C00" if qty <= 5 else "#2E7D32"
-            stock_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(compact_text(s.get("Nombre"), 34))),
-                ft.DataCell(ft.Text(str(int(qty)))),
-                ft.DataCell(ft.Text(estado, color=color, weight="bold")),
-            ]))
-        stock_box.controls = [make_table(["Producto", "Stock", "Estado"], stock_rows)]
+        # ---------------- Stock crítico ----------------
+        stock_filas = []
+        for item in inventory.get("stock", [])[:40]:
+            qty = safe_float(item.get("Cantidad"))
+            if qty <= 0:
+                estado, (color, fondo) = "Crítico", ESTADO_CRITICO
+            elif qty <= 5:
+                estado, (color, fondo) = "Bajo", ESTADO_BAJO
+            else:
+                estado, (color, fondo) = "Correcto", ESTADO_CORRECTO
+            stock_filas.append([
+                Celda(compact_text(item.get("Nombre"), 40), negrita=True),
+                Celda(str(int(qty)), negrita=True, color=color),
+                Celda(estado, color=color, fondo=fondo),
+            ])
+        stock_box.controls = [tabla_reporte(
+            page,
+            [
+                ColumnaReporte("Producto", flex=5, principal=True),
+                ColumnaReporte("Stock", flex=2, alinear="der", destacada=True),
+                ColumnaReporte("Estado", flex=2, alinear="der"),
+            ],
+            stock_filas,
+        )]
 
-        sales_rows = []
-        for r in rows[:160]:
-            sales_rows.append(ft.DataRow(cells=[
-                ft.DataCell(ft.Text(str(r.get("Fuente") or ""))),
-                ft.DataCell(ft.Text(str(r.get("Fecha") or ""))),
-                ft.DataCell(ft.Text(str(r.get("Hora") or ""))),
-                ft.DataCell(ft.Text(compact_text(r.get("Persona"), 18))),
-                ft.DataCell(ft.Text(compact_text(r.get("Estado"), 20))),
-                ft.DataCell(ft.Text(compact_text(r.get("Detalle"), 50), max_lines=2, overflow=ft.TextOverflow.ELLIPSIS)),
-                ft.DataCell(ft.Text(money(r.get("Total")), weight="bold")),
-            ]))
-        sales_box.controls = [make_table(["Fuente", "Fecha", "Hora", "Persona", "Estado", "Detalle", "Total"], sales_rows)]
+        # ---------------- Detalle consolidado ----------------
+        sales_box.controls = [tabla_reporte(
+            page,
+            [
+                ColumnaReporte("Detalle", flex=6, principal=True),
+                ColumnaReporte("Fecha", flex=2),
+                ColumnaReporte("Hora", flex=2),
+                ColumnaReporte("Persona", flex=2),
+                ColumnaReporte("Fuente", flex=2),
+                ColumnaReporte("Estado", flex=2),
+                ColumnaReporte("Total", flex=2, alinear="der", destacada=True),
+            ],
+            [
+                [
+                    Celda(compact_text(r.get("Detalle"), 90), max_lineas=2),
+                    str(r.get("Fecha") or ""),
+                    str(r.get("Hora") or "")[:5],
+                    compact_text(r.get("Persona"), 18),
+                    str(r.get("Fuente") or ""),
+                    compact_text(r.get("Estado"), 20),
+                    Celda(money(r.get("Total")), negrita=True),
+                ]
+                for r in rows[:160]
+            ],
+        )]
 
     def generar_reporte(e=None, actualizar=True):
         ok, start_obj, end_obj = validate_filters()
@@ -929,17 +983,22 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     tables_body = ft.Container(content=top_box)
     table_buttons = {}
 
-    def table_tab_button(key: str, label: str):
+    def table_tab_button(key: str, label: str, icono_tab=None):
+        seleccionado = key == active_table["value"]
         btn = ft.Container(
             border_radius=18,
-            padding=ft.padding.symmetric(horizontal=18, vertical=12),
+            padding=ft.padding.symmetric(horizontal=8 if es_movil else 18, vertical=10 if es_movil else 12),
             ink=True,
             content=ft.Row(
                 tight=True,
                 spacing=8,
-                controls=[
-                    ft.Text("▣", size=12, color="white" if key == active_table["value"] else "#C86DD7"),
-                    ft.Text(label, size=13, weight="bold", color="white" if key == active_table["value"] else "#C86DD7"),
+                # En el celular las pestañas miden media pantalla: sin el
+                # ícono el texto completo sí cabe.
+                controls=([] if es_movil else [
+                    ft.Icon(icono_tab, size=16, color="white" if seleccionado else "#C86DD7")
+                    if icono_tab else ft.Text("•", size=12, color="white" if seleccionado else "#C86DD7"),
+                ]) + [
+                    ft.Text(label, size=12 if es_movil else 13, weight="bold", color="white" if seleccionado else "#C86DD7"),
                 ],
             ),
         )
@@ -971,10 +1030,8 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             btn.bgcolor = "#C86DD7" if selected else "white"
             btn.border = None if selected else ft.border.all(1, "#EFCDF7")
             try:
-                icon_txt = btn.content.controls[0]
-                label_txt = btn.content.controls[1]
-                icon_txt.color = "white" if selected else "#C86DD7"
-                label_txt.color = "white" if selected else "#C86DD7"
+                for control in btn.content.controls:
+                    control.color = "white" if selected else "#C86DD7"
             except Exception:
                 pass
 
@@ -983,22 +1040,27 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
         except Exception:
             pass
 
-    table_tabs = ft.Row(
-        wrap=True,
-        spacing=10,
-        run_spacing=10,
-        controls=[
-            table_tab_button("top", "Más vendidos"),
-            table_tab_button("forecast", "Reabastecimiento"),
-            table_tab_button("stock", "Stock crítico"),
-            table_tab_button("detail", "Detalle consolidado"),
-        ],
-    )
+    botones_tabs = [
+        table_tab_button("top", "Más vendidos", ICON_TOP),
+        table_tab_button("forecast", "Reabastecer", ICON_FORECAST),
+        table_tab_button("stock", "Stock crítico", ICON_STOCK),
+        table_tab_button("detail", "Detalle", ICON_DETAIL),
+    ]
+    if es_movil:
+        # En el celular las pestañas iban una por renglón (cuatro
+        # renglones antes de ver la tabla); ahora van de dos en dos.
+        for btn in botones_tabs:
+            btn.col = {"xs": 6}
+            btn.content.alignment = ft.MainAxisAlignment.CENTER
+            btn.content.tight = False
+        table_tabs = ft.ResponsiveRow(controls=botones_tabs, spacing=8, run_spacing=8)
+    else:
+        table_tabs = ft.Row(wrap=True, spacing=10, run_spacing=10, controls=botones_tabs)
 
     tables_panel = ft.Container(
         bgcolor="white",
         border_radius=24,
-        padding=18,
+        padding=14 if es_movil else 18,
         border=ft.border.all(1, "#F0D7F7"),
         content=ft.Column(
             spacing=12,
@@ -1021,18 +1083,20 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     filtros = ft.Container(
         bgcolor="white",
         border_radius=24,
-        padding=18,
+        padding=14 if es_movil else 18,
         border=ft.border.all(1, "#F0D7F7"),
         content=ft.Column([
             ft.Text("Filtros del reporte", size=18, weight="bold", color="#333333"),
             ft.Text("El rango inicial se ajusta a las fechas reales encontradas en ventas, pedidos y recibos.", size=12, color="#6B7280"),
             ft.ResponsiveRow([
-                ft.Container(content=fecha_inicio, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
-                ft.Container(content=fecha_fin, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
+                # En el celular las fechas y los totales van en pares para
+                # que los filtros no ocupen toda la pantalla.
+                ft.Container(content=fecha_inicio, col={"xs": 6, "md": 3, "lg": 2}),
+                ft.Container(content=fecha_fin, col={"xs": 6, "md": 3, "lg": 2}),
                 ft.Container(content=dd_empleado, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
                 ft.Container(content=txt_producto, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
-                ft.Container(content=txt_total_min, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
-                ft.Container(content=txt_total_max, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
+                ft.Container(content=txt_total_min, col={"xs": 6, "md": 3, "lg": 2}),
+                ft.Container(content=txt_total_max, col={"xs": 6, "md": 3, "lg": 2}),
                 ft.Container(content=dd_orden, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
             ], spacing=10, run_spacing=10),
             ft.Row([btn_generar, btn_limpiar, btn_pdf], wrap=True, spacing=10),
@@ -1061,14 +1125,14 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     content = ft.Container(
         expand=True,
         bgcolor="#F9F6FB",
-        padding=20,
+        padding=12 if es_movil else 20,
         content=ft.Column(
             expand=True,
             scroll=ft.ScrollMode.AUTO,
-            spacing=16,
+            spacing=14 if es_movil else 16,
             controls=[
                 ft.Column([
-                    ft.Text("Generar reportes con IA", size=24, weight="bold", color="#C86DD7"),
+                    ft.Text("Generar reportes con IA", size=21 if es_movil else 24, weight="bold", color="#C86DD7"),
                     ft.Text("Analiza ventas, pedidos, insumos, productos vendidos y stock para tomar mejores decisiones.", size=13, color="#6B7280"),
                 ], spacing=2),
                 filtros,
@@ -1079,6 +1143,6 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
         ),
     )
 
-    layout = ft.Row([sidebar, content], expand=True)
-    appbar = ft.AppBar(title=ft.Text("Corallie Bubble - Reportes IA"), bgcolor="#C86DD7", color="white")
+    layout = admin_layout(page, sidebar, content)
+    appbar = build_admin_appbar(page, "Corallie Bubble - Reportes IA")
     return ft.View(route="/reportes", controls=[layout], appbar=appbar)

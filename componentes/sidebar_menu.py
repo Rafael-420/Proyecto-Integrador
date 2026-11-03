@@ -1,6 +1,11 @@
 import flet as ft
 import re
 
+from componentes.layout_sidebar import (
+    es_pantalla_angosta,
+    layout_con_sidebar,
+    registrar_sidebar,
+)
 from configuracion.base_datos import get_connection
 from servicios import servicio_seguridad as seguridad
 from validaciones.validacion_personas import (
@@ -26,6 +31,9 @@ ALIGN_CENTER = (
     getattr(getattr(ft, "alignment", None), "center", None)
     or getattr(ft.Alignment, "CENTER", None)
 )
+
+ANCHO_RIEL = 78
+ANCHO_ABIERTO = 250
 
 
 def _icon(*names):
@@ -225,14 +233,14 @@ def build_menu_sidebar(
     get_cart_count=None,
 ):
     """Construye el sidebar del menú interactivo con perfil de cliente editable."""
-    # En pantallas angostas (celular) el sidebar expandido (250px) se come
-    # más de la mitad de la pantalla y deja al contenido principal sin
-    # espacio (eso causaba el texto del encabezado partido letra por
-    # letra). En celular arranca colapsado (78px); en desktop, expandido
-    # como siempre.
-    ancho_pagina = getattr(page, "width", None)
-    estado = {"collapsed": bool(ancho_pagina and ancho_pagina < 700)}
+    # En celular arranca plegado (78px) y, al abrirlo, se monta encima del
+    # contenido y se esconde al tocar fuera o al elegir una opción (ver
+    # componentes/layout_sidebar.py). En escritorio va abierto, al lado
+    # del contenido, como siempre.
+    angosto = es_pantalla_angosta(page)
+    estado = {"collapsed": angosto}
     nav_refs = []
+    oyentes = []
 
     def current_tab():
         try:
@@ -657,6 +665,9 @@ def build_menu_sidebar(
             )
 
         def click(ev=None):
+            # En celular el sidebar se esconde antes de ejecutar la opción.
+            if angosto and not estado["collapsed"]:
+                fijar_estado(True)
             accion(ev)
             for ref in nav_refs:
                 ref["paint"]()
@@ -771,7 +782,7 @@ def build_menu_sidebar(
 
     def aplicar_estado():
         collapsed = estado["collapsed"]
-        sidebar.width = 78 if collapsed else 250
+        sidebar.width = ANCHO_RIEL if collapsed else ANCHO_ABIERTO
         sidebar.padding = 12 if collapsed else 18
         titulo.visible = not collapsed
         subtitulo.visible = not collapsed
@@ -783,11 +794,53 @@ def build_menu_sidebar(
         for ref in nav_refs:
             ref["paint"]()
 
-    def toggle_sidebar(e=None):
-        estado["collapsed"] = not estado["collapsed"]
+    def fijar_estado(colapsado: bool):
+        estado["collapsed"] = colapsado
         aplicar_estado()
+        for oyente in list(oyentes):
+            try:
+                oyente(colapsado)
+            except Exception:
+                pass
+
+    def toggle_sidebar(e=None):
+        fijar_estado(not estado["collapsed"])
         page.update()
 
+    def colapsar(e=None):
+        if not estado["collapsed"]:
+            fijar_estado(True)
+            page.update()
+
+    def abrir_perfil_desde_sidebar(e=None):
+        if angosto and not estado["collapsed"]:
+            fijar_estado(True)
+        abrir_perfil(e)
+
+    header.on_click = abrir_perfil_desde_sidebar
     toggle_icon.on_click = toggle_sidebar
     aplicar_estado()
+    registrar_sidebar(
+        sidebar,
+        angosto=angosto,
+        ancho_riel=ANCHO_RIEL,
+        esta_colapsado=lambda: estado["collapsed"],
+        colapsar=colapsar,
+        escuchar=oyentes.append,
+    )
     return sidebar
+
+
+def menu_layout(page: ft.Page, sidebar: ft.Control, contenido: ft.Control) -> ft.Control:
+    """Acomoda el sidebar del cliente y el contenido del menú.
+
+    En escritorio van lado a lado. En celular el sidebar se monta encima
+    del contenido, con un velo que lo cierra al tocar fuera.
+    """
+    return layout_con_sidebar(
+        page,
+        sidebar,
+        contenido,
+        espaciado=0,
+        alineacion_vertical=ft.CrossAxisAlignment.STRETCH,
+    )

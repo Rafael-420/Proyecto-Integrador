@@ -1,6 +1,6 @@
 import flet as ft
 import re
-from componentes.sidebar import build_sidebar
+from componentes.sidebar import build_sidebar, sidebar_layout
 from datetime import date
 from configuracion.base_datos import get_connection
 
@@ -738,7 +738,7 @@ def movimientos_view(page: ft.Page, nombre: str) -> ft.View:
         ),
     )
 
-    layout = ft.Row([sidebar, main_content], expand=True, spacing=0)
+    layout = sidebar_layout(page, sidebar, main_content, espaciado=0)
 
     appbar = ft.AppBar(
         leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_pos),

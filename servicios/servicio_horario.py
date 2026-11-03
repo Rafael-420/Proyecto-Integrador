@@ -15,6 +15,12 @@ Reglas:
   4. Los pedidos se dejan de recibir unos minutos antes del cierre
      (`estado_servicio.MinutosAntesCierre`), para que dé tiempo de
      prepararlos y recogerlos.
+  5. La caja del local debe estar conectada: mientras un empleado tiene
+     la sesión abierta, la aplicación registra cada minuto la hora en
+     `estado_servicio.UltimaSenalCaja` (ver servicios/senal_caja.py). Si
+     esa señal tiene más de MINUTOS_SENAL_CAJA minutos, el local se
+     quedó sin internet o nadie atiende la caja, y no se aceptan pedidos
+     que nadie vería.
 
 Con el local cerrado el menú sigue abierto para navegar; solo se
 bloquea la creación de pedidos.
@@ -30,7 +36,7 @@ import re
 from datetime import date, datetime, time, timedelta, timezone
 
 from configuracion.base_datos import get_connection
-from configuracion.variables import ZONA_HORARIA
+from configuracion.variables import MINUTOS_SENAL_CAJA, ZONA_HORARIA
 
 
 DIAS_SEMANA = ("Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo")
@@ -44,6 +50,10 @@ LARGO_MOTIVO_MAXIMO = 120
 _DIAS_BUSQUEDA = 21
 
 MENSAJE_SERVICIO_PAUSADO = "El servicio de pedidos está pausado por el momento."
+MENSAJE_CAJA_DESCONECTADA = (
+    "El local no está recibiendo pedidos en este momento. "
+    "Intenta de nuevo en unos minutos."
+)
 
 
 # --------------------------------------------------------
@@ -211,17 +221,45 @@ def _cuando_abre(ahora, horarios, dias_cerrados) -> tuple[str, datetime | None]:
     return f" Abrimos {_describir_momento(momento, ahora)}.", momento
 
 
-def evaluar_estado(ahora: datetime, horarios: dict, dias_cerrados: dict, servicio: dict) -> dict:
+def caja_conectada(ahora: datetime, caja: dict | None) -> bool:
+    """True si la caja mandó su señal hace menos de los minutos permitidos.
+
+    caja: {"ultima_senal": datetime | None, "minutos": int}
+          None significa que la regla no aplica (migración sin aplicar o
+          regla desactivada con MINUTOS_SENAL_CAJA=0).
+    """
+    if caja is None:
+        return True
+    minutos = int(caja.get("minutos") or 0)
+    if minutos <= 0:
+        return True
+    ultima = caja.get("ultima_senal")
+    if not isinstance(ultima, datetime):
+        # Ninguna caja se ha conectado todavía: nadie vería el pedido.
+        return False
+    return ahora - ultima <= timedelta(minutes=minutos)
+
+
+def evaluar_estado(
+    ahora: datetime,
+    horarios: dict,
+    dias_cerrados: dict,
+    servicio: dict,
+    caja: dict | None = None,
+) -> dict:
     """Decide si el menú acepta pedidos en el momento `ahora`.
 
     horarios:      {dia_semana: {"abierto": bool, "apertura": time, "cierre": time}}
     dias_cerrados: {date: motivo}
     servicio:      {"menu_activo": bool, "mensaje": str | None, "margen": int}
+    caja:          {"ultima_senal": datetime | None, "minutos": int} o None
+                   si la regla de la señal de la caja no aplica.
 
     Devuelve un diccionario con:
       abierto           True si se pueden hacer pedidos.
       motivo            abierto | servicio_pausado | dia_cerrado | descanso |
-                        antes_de_abrir | despues_de_cerrar | sin_horario
+                        antes_de_abrir | despues_de_cerrar | sin_horario |
+                        caja_desconectada
       mensaje           Texto para el cliente (None si está abierto).
       proxima_apertura  datetime o None.
       cierre_pedidos    Hora límite para pedir hoy (solo si está abierto).
@@ -256,12 +294,27 @@ def evaluar_estado(ahora: datetime, horarios: dict, dias_cerrados: dict, servici
         mensaje = (servicio.get("mensaje") or "").strip() or MENSAJE_SERVICIO_PAUSADO
         return cerrado("servicio_pausado", mensaje, con_proxima=False)
 
+    # La señal de la caja se revisa al final, solo si por horario se
+    #    podría pedir: fuera de horario es más útil decirle al cliente
+    #    cuándo abrimos que decirle que la caja no está conectada.
+    def revisar_caja(respuesta: dict) -> dict:
+        if caja_conectada(ahora, caja):
+            return respuesta
+        respuesta.update(
+            abierto=False,
+            motivo="caja_desconectada",
+            mensaje=MENSAJE_CAJA_DESCONECTADA,
+            proxima_apertura=None,
+            cierre_pedidos=None,
+        )
+        return respuesta
+
     # 2. Sin horario capturado (por ejemplo, la migración aún no se
-    #    aplicó): no se bloquea a nadie, para no apagar el menú por un
-    #    problema de configuración.
+    #    aplicó): no se bloquea por horario, para no apagar el menú por
+    #    un problema de configuración.
     if not horarios:
         resultado["motivo"] = "sin_horario"
-        return resultado
+        return revisar_caja(resultado)
 
     hoy = ahora.date()
 
@@ -297,7 +350,9 @@ def evaluar_estado(ahora: datetime, horarios: dict, dias_cerrados: dict, servici
         return cerrado("despues_de_cerrar", texto)
 
     resultado["cierre_pedidos"] = cierre_pedidos
-    return resultado
+
+    # 7. Con el local en horario, la caja debe estar conectada.
+    return revisar_caja(resultado)
 
 
 # --------------------------------------------------------
@@ -380,6 +435,68 @@ def _leer_dias_cerrados(cur, desde: date, hasta: date | None = None) -> list[dic
     ]
 
 
+def _como_datetime(valor) -> datetime | None:
+    return valor.replace(microsecond=0) if isinstance(valor, datetime) else None
+
+
+def _leer_caja(cur) -> dict | None:
+    """Última señal de la caja. None si la regla no aplica.
+
+    Se lee en una consulta aparte: si la migración de la señal todavía
+    no se aplicó (no existen las columnas), la consulta falla aquí y el
+    resto del estado del menú se sigue leyendo normalmente.
+    """
+    if int(MINUTOS_SENAL_CAJA or 0) <= 0:
+        return None
+    try:
+        cur.execute(
+            """
+            SELECT UltimaSenalCaja
+            FROM estado_servicio
+            WHERE IdEstadoServicio = 1
+            """
+        )
+        fila = cur.fetchone()
+    except Exception:
+        return None
+    if not isinstance(fila, dict):
+        return None
+    return {
+        "ultima_senal": _como_datetime(fila.get("UltimaSenalCaja")),
+        "minutos": int(MINUTOS_SENAL_CAJA),
+    }
+
+
+def ultima_desconexion_caja(cur) -> tuple[datetime, datetime] | None:
+    """Último periodo en que la caja estuvo sin señal: (inicio, fin).
+
+    Lo usa el marcado automático de "No recogido" para no castigar al
+    cliente por un pedido que estuvo esperando mientras el local no
+    tenía internet. None si no hay registro o la migración no se aplicó.
+    """
+    try:
+        cur.execute(
+            """
+            SELECT InicioDesconexionCaja, FinDesconexionCaja
+            FROM estado_servicio
+            WHERE IdEstadoServicio = 1
+            """
+        )
+        fila = cur.fetchone()
+    except Exception:
+        return None
+    if isinstance(fila, dict):
+        inicio, fin = fila.get("InicioDesconexionCaja"), fila.get("FinDesconexionCaja")
+    elif isinstance(fila, (tuple, list)) and len(fila) >= 2:
+        inicio, fin = fila[0], fila[1]
+    else:
+        return None
+    inicio, fin = _como_datetime(inicio), _como_datetime(fin)
+    if inicio is None or fin is None or fin < inicio:
+        return None
+    return inicio, fin
+
+
 def _cerrar(conn, cur):
     try:
         if cur:
@@ -409,6 +526,7 @@ def estado_menu() -> dict:
         servicio = _leer_servicio(cur)
         horarios = _leer_horarios(cur)
         cerrados = _leer_dias_cerrados(cur, ahora.date(), ahora.date() + timedelta(days=_DIAS_BUSQUEDA))
+        caja = _leer_caja(cur)
     except Exception:
         return {
             "abierto": True,
@@ -422,7 +540,7 @@ def estado_menu() -> dict:
         _cerrar(conn, cur)
 
     dias_cerrados = {d["fecha"]: d["motivo"] for d in cerrados if d["fecha"]}
-    return evaluar_estado(ahora, horarios, dias_cerrados, servicio)
+    return evaluar_estado(ahora, horarios, dias_cerrados, servicio, caja)
 
 
 # --------------------------------------------------------
@@ -443,6 +561,7 @@ def obtener_configuracion() -> dict:
         servicio = _leer_servicio(cur)
         horarios = _leer_horarios(cur)
         cerrados = _leer_dias_cerrados(cur, ahora.date())
+        caja = _leer_caja(cur)
     finally:
         _cerrar(conn, cur)
 
@@ -452,8 +571,73 @@ def obtener_configuracion() -> dict:
         "servicio": servicio,
         "horarios": horarios,
         "dias_cerrados": cerrados,
-        "estado": evaluar_estado(ahora, horarios, dias_cerrados, servicio),
+        "caja": caja,
+        "estado": evaluar_estado(ahora, horarios, dias_cerrados, servicio, caja),
     }
+
+
+# --------------------------------------------------------
+# Señal de la caja
+# --------------------------------------------------------
+def registrar_senal_caja() -> bool:
+    """Registra que la caja sigue conectada. Devuelve False si no hay conexión.
+
+    Si la señal anterior es más vieja que la tolerancia, la caja estuvo
+    desconectada (sin internet, o cerrada): se guarda ese periodo para
+    que el marcado automático de "No recogido" no castigue a los
+    clientes cuyos pedidos esperaron durante ese tiempo.
+
+    La hora es la del servidor MySQL, no la del equipo de la caja.
+    """
+    tolerancia = timedelta(minutes=max(1, int(MINUTOS_SENAL_CAJA or 0) or 3))
+    conn = None
+    cur = None
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        ahora = ahora_servidor(cur)
+        cur.execute(
+            """
+            SELECT UltimaSenalCaja
+            FROM estado_servicio
+            WHERE IdEstadoServicio = 1
+            FOR UPDATE
+            """
+        )
+        fila = cur.fetchone() or {}
+        anterior = _como_datetime(fila.get("UltimaSenalCaja")) if isinstance(fila, dict) else None
+
+        if anterior is not None and ahora - anterior > tolerancia:
+            cur.execute(
+                """
+                UPDATE estado_servicio
+                SET UltimaSenalCaja = %s,
+                    InicioDesconexionCaja = %s,
+                    FinDesconexionCaja = %s
+                WHERE IdEstadoServicio = 1
+                """,
+                (ahora, anterior, ahora),
+            )
+        else:
+            cur.execute(
+                """
+                UPDATE estado_servicio
+                SET UltimaSenalCaja = %s
+                WHERE IdEstadoServicio = 1
+                """,
+                (ahora,),
+            )
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            if conn:
+                conn.rollback()
+        except Exception:
+            pass
+        return False
+    finally:
+        _cerrar(conn, cur)
 
 
 def guardar_servicio_menu(activo: bool, mensaje: str | None, margen: int, usuario: str) -> None:

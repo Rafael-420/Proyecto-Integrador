@@ -8,6 +8,7 @@ if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
 from configuracion.base_datos import get_connection
 from configuracion.variables import ROL_CLIENTE, ROL_EMPLEADO
 from servicios import servicio_seguridad as seguridad
+from utilidades.flet_compat import set_error, set_texto_boton, snack
 
 # -------------------------------------------------------------------
 # HELPERS DE BD  (verificación cruzada empleado + cliente)
@@ -91,7 +92,29 @@ def RegistroView(page: ft.Page, tipo: str):
     txt_pass     = ft.TextField(label="Contraseña",          password=True, can_reveal_password=True)
     txt_pass2    = ft.TextField(label="Confirmar contraseña",password=True, can_reveal_password=True)
 
-    lbl_msg = ft.Text("")
+    # Los mensajes de error (sobre todo el de la contraseña) son largos;
+    # sin esto se cortaban con "..." en el celular.
+    for campo in (txt_nombre, txt_apellido, txt_correo, txt_tel, txt_usuario, txt_pass, txt_pass2):
+        campo.error_max_lines = 3
+
+    # Mensaje general junto al botón. En el celular los campos con error
+    # pueden quedar fuera de la pantalla; este aviso sí se ve.
+    lbl_msg = ft.Text("", size=13, text_align=ft.TextAlign.CENTER)
+
+    btn_registrar = ft.ElevatedButton(
+        "Registrarme",
+        bgcolor="#C86DD7",
+        color="white",
+    )
+
+    # Bandera anti doble envío: con la base de datos en la nube el
+    # registro tarda unos segundos (dos consultas de duplicados, el hash
+    # de la contraseña y dos INSERT).
+    en_proceso = {"value": False}
+
+    def mostrar_mensaje(texto: str, color: str = "red"):
+        lbl_msg.value = texto
+        lbl_msg.color = color
 
     # ------------------------------------------------------------------
     # LIMPIEZA EN TIEMPO REAL
@@ -118,9 +141,14 @@ def RegistroView(page: ft.Page, tipo: str):
     PATRON_CORREO  = re.compile(r"^[\w\.-]+@(gmail|hotmail|outlook|yahoo)\.com$")
     PATRON_USUARIO = re.compile(r"^[A-Za-z0-9_]{4,20}$")
 
+    # Antes los errores se escribían en campo.error_text. En Flet 0.80
+    # esa propiedad ya no existe en TextField (ahora es error): Python
+    # aceptaba la asignación, pero Flet no la dibujaba, así que ninguna
+    # validación aparecía y el botón parecía no hacer nada. set_error
+    # usa la propiedad correcta en cada versión.
     def validar_campos() -> bool:
         for campo in [txt_nombre, txt_apellido, txt_correo, txt_tel, txt_usuario, txt_pass, txt_pass2]:
-            campo.error_text = None
+            set_error(campo, None)
 
         nombre   = (txt_nombre.value   or "").strip()
         apellido = (txt_apellido.value or "").strip()
@@ -134,57 +162,61 @@ def RegistroView(page: ft.Page, tipo: str):
 
         # --- Nombre
         if not PATRON_NOMBRE.match(nombre):
-            txt_nombre.error_text = "Solo letras, mínimo 2 y máximo 30 caracteres"
+            set_error(txt_nombre, "Solo letras, mínimo 2 y máximo 30 caracteres")
             valido = False
 
         # --- Apellido
         if not PATRON_NOMBRE.match(apellido):
-            txt_apellido.error_text = "Solo letras, mínimo 2 y máximo 30 caracteres"
+            set_error(txt_apellido, "Solo letras, mínimo 2 y máximo 30 caracteres")
             valido = False
 
         # --- Correo (formato + duplicado cruzado)
         if not PATRON_CORREO.match(correo):
-            txt_correo.error_text = "Correo inválido. Ejemplo: usuario@gmail.com"
+            set_error(txt_correo, "Correo inválido. Ejemplo: usuario@gmail.com")
             valido = False
         else:
             try:
                 existe, msg_dup = _existe_dato_persona("Correo", correo)
                 if existe:
-                    txt_correo.error_text = msg_dup
+                    set_error(txt_correo, msg_dup)
                     valido = False
             except Exception:
                 pass  # no bloquear por error de BD
 
         # --- Teléfono (formato + duplicado cruzado)
         if not tel.isdigit() or len(tel) != 10:
-            txt_tel.error_text = "El teléfono debe tener exactamente 10 números"
+            set_error(txt_tel, "El teléfono debe tener exactamente 10 números")
             valido = False
         else:
             try:
                 existe, msg_dup = _existe_dato_persona("Telefono", tel)
                 if existe:
-                    txt_tel.error_text = msg_dup
+                    set_error(txt_tel, msg_dup)
                     valido = False
             except Exception:
                 pass
 
         # --- Usuario (formato + duplicado en tabla usuario)
         if not PATRON_USUARIO.match(usuario):
-            txt_usuario.error_text = "Usuario de 4 a 20 caracteres, solo letras, números o _"
+            set_error(txt_usuario, "Usuario de 4 a 20 caracteres, solo letras, números o _")
             valido = False
         # la comprobación de usuario duplicado se hace en registrar() justo antes del INSERT
 
         # --- Contraseña (politica central de servicio_seguridad)
         politica = seguridad.validar_fortaleza(password, usuario)
         if not politica.valida:
-            txt_pass.error_text = politica.mensaje
+            set_error(txt_pass, politica.mensaje)
             valido = False
 
         # --- Confirmación
         if password != password2:
-            txt_pass2.error_text = "Las contraseñas no coinciden"
+            set_error(txt_pass2, "Las contraseñas no coinciden")
             valido = False
 
+        if valido:
+            mostrar_mensaje("")
+        else:
+            mostrar_mensaje("Revisa los campos marcados en rojo.")
         page.update()
         return valido
 
@@ -201,10 +233,34 @@ def RegistroView(page: ft.Page, tipo: str):
     # ------------------------------------------------------------------
     # REGISTRAR EN LA BD
     # ------------------------------------------------------------------
-    def registrar(e):
-        if not validar_campos():
-            return
+    def bloquear_boton(bloquear: bool):
+        btn_registrar.disabled = bloquear
+        set_texto_boton(btn_registrar, "Registrando..." if bloquear else "Registrarme")
 
+    def registrar(e):
+        # Primera línea de defensa contra el doble toque.
+        if en_proceso["value"]:
+            return
+        en_proceso["value"] = True
+        bloquear_boton(True)
+        mostrar_mensaje("Revisando tus datos...", "#6B7280")
+        page.update()
+
+        try:
+            if not validar_campos():
+                return
+            if registrar_en_bd():
+                return  # ya se navegó al login
+        finally:
+            en_proceso["value"] = False
+            bloquear_boton(False)
+            try:
+                page.update()
+            except Exception:
+                pass
+
+    def registrar_en_bd() -> bool:
+        """Inserta usuario + cliente/empleado. Devuelve True si se registró."""
         nombre   = txt_nombre.value.strip()
         apellido = txt_apellido.value.strip()
         correo   = txt_correo.value.strip().lower()
@@ -212,6 +268,8 @@ def RegistroView(page: ft.Page, tipo: str):
         usuario  = txt_usuario.value.strip()
         password = txt_pass.value.strip()
 
+        conn = None
+        cursor = None
         try:
             conn   = get_connection()
             cursor = conn.cursor()
@@ -219,9 +277,9 @@ def RegistroView(page: ft.Page, tipo: str):
             # Revisar si el usuario ya existe
             cursor.execute("SELECT IdUsuario FROM usuario WHERE NombreUsuario=%s", (usuario,))
             if cursor.fetchone():
-                txt_usuario.error_text = "Ese nombre de usuario ya existe"
-                page.update()
-                return
+                set_error(txt_usuario, "Ese nombre de usuario ya existe")
+                mostrar_mensaje("Ese nombre de usuario ya existe. Elige otro.")
+                return False
 
             # Insertar en usuario
             # La contrasena NUNCA se guarda tal cual: se almacena su hash
@@ -243,22 +301,27 @@ def RegistroView(page: ft.Page, tipo: str):
 
             conn.commit()
 
-            page.snack_bar       = ft.SnackBar(
-                content=ft.Text(f"{tipo} registrado correctamente. Ahora puedes iniciar sesión.")
-            )
-            page.snack_bar.open  = True
-            page.update()
-
+            # page.snack_bar ya no existe en Flet 0.80; snack() usa la API
+            # de cada versión. El aviso vive en el overlay de la página,
+            # así que se sigue viendo después de cambiar al login.
             ir_login()
+            snack(page, f"{tipo} registrado correctamente. Ahora puedes iniciar sesión.")
+            return True
 
         except Exception as ex:
-            lbl_msg.value = f"Error al registrar: {ex}"
-            lbl_msg.color = "red"
-            page.update()
+            try:
+                if conn:
+                    conn.rollback()
+            except Exception:
+                pass
+            mostrar_mensaje(f"Error al registrar: {ex}")
+            return False
         finally:
             try:
-                cursor.close()
-                conn.close()
+                if cursor:
+                    cursor.close()
+                if conn:
+                    conn.close()
             except Exception:
                 pass
 
@@ -292,14 +355,9 @@ def RegistroView(page: ft.Page, tipo: str):
                 txt_usuario,
                 txt_pass,
                 txt_pass2,
-                ft.ElevatedButton(
-                    "Registrarme",
-                    bgcolor="#C86DD7",
-                    color="white",
-                    on_click=registrar,
-                ),
-                ft.TextButton("Volver al login", on_click=volver_login),
                 lbl_msg,
+                btn_registrar,
+                ft.TextButton("Volver al login", on_click=volver_login),
             ],
             spacing=15,
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
@@ -307,5 +365,7 @@ def RegistroView(page: ft.Page, tipo: str):
             scroll=ft.ScrollMode.AUTO,
         ),
     )
+
+    btn_registrar.on_click = registrar
 
     return ft.View(route="/registro", controls=[contenido])

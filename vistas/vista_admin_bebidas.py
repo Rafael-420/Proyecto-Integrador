@@ -8,7 +8,8 @@ marca como agotadas cuando no se pueden vender.
 
 import flet as ft
 
-from componentes.sidebar_admin import build_admin_sidebar
+from componentes.appbar_admin import build_admin_appbar
+from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from servicios.servicio_bebidas import (
     listar_bebidas_admin,
     existe_bebida,
@@ -496,12 +497,13 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
         content=ft.Column(controls=[header, ft.Container(height=10), grid_bebidas], expand=True, spacing=10),
     )
 
-    layout = ft.Row([sidebar, main_content], expand=True)
+    layout = admin_layout(page, sidebar, main_content)
 
     recargar()
 
     return ft.View(
         route="/admin_bebidas",
+        appbar=build_admin_appbar(page, "Corallie Bubble - Admin"),
         controls=[layout],
         bgcolor="#F9F6FB",
         padding=0,

@@ -1,6 +1,7 @@
 import flet as ft
 from configuracion.base_datos import get_connection
-from componentes.sidebar_admin import build_admin_sidebar
+from componentes.appbar_admin import build_admin_appbar
+from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
 
 from validaciones.validacion_personas import (
@@ -1060,19 +1061,14 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         vertical_alignment=ft.CrossAxisAlignment.CENTER,
     )
 
-    # El sidebar y el contenido eran hermanos dentro de un Row, así que
-    # al desplegarse le quitaba el ancho al contenido: el título se
-    # cortaba, el buscador partía su etiqueta letra por letra y las
-    # tarjetas quedaban aplastadas. Dentro de un Stack el sidebar se
-    # monta ENCIMA, como cualquier menú lateral de celular, y el
-    # contenido conserva su ancho completo. El padding izquierdo deja
-    # libre el riel plegado para que no tape nada.
-    ANCHO_RIEL = 78
-
+    # Antes esta pantalla montaba su propio Stack para que el sidebar
+    # quedara encima del contenido. Ese comportamiento ahora vive en
+    # componentes/sidebar_admin.py (admin_layout) y lo usan todas las
+    # pantallas de administrador.
     cuerpo = ft.Container(
         expand=True,
         bgcolor="#F9F6FB",
-        padding=_relleno_contenido(ANCHO_RIEL),
+        padding=20,
         content=ft.Row(
             controls=[
                 ft.Container(
@@ -1098,20 +1094,8 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         ),
     )
 
-    content = ft.Stack(
-        expand=True,
-        controls=[
-            cuerpo,
-            # top/bottom/left anclan el sidebar al costado y lo estiran
-            # a todo el alto disponible del Stack.
-            ft.Container(content=sidebar, top=0, bottom=0, left=0),
-        ],
-    )
+    content = admin_layout(page, sidebar, cuerpo)
 
-    appbar = ft.AppBar(
-        title=ft.Text("Corallie Bubble - Admin"),
-        bgcolor="#C86DD7",
-        color="white",
-    )
+    appbar = build_admin_appbar(page, "Corallie Bubble - Admin")
 
     return ft.View(route="/admin_empleados", controls=[content], appbar=appbar)

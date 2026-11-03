@@ -410,5 +410,184 @@ class PruebasAdministracion(unittest.TestCase):
         conexion.rollback.assert_called_once()
 
 
+# ============================================================
+# Señal de la caja (local sin internet)
+# ============================================================
+def _caja(minutos_atras=1, minutos=3, ahora=None):
+    """Caja que dio su última señal hace `minutos_atras` minutos."""
+    ahora = ahora or _momento(LUNES, 16)
+    ultima = None if minutos_atras is None else ahora - timedelta(minutes=minutos_atras)
+    return {"ultima_senal": ultima, "minutos": minutos}
+
+
+class PruebasSenalCaja(unittest.TestCase):
+    """CP-HOR-34 a CP-HOR-44: el menú no acepta pedidos que nadie vería.
+
+    Riesgo: el local se queda sin internet, el cliente pide desde su
+    celular, nadie ve el pedido en la caja y el cliente termina
+    bloqueado por un "No recogido" que no fue su culpa.
+    """
+
+    def _evaluar_con_caja(self, caja, ahora=None, **kwargs):
+        ahora = ahora or _momento(LUNES, 16)
+        return horario.evaluar_estado(
+            ahora,
+            kwargs.get("horarios", _semana()),
+            kwargs.get("cerrados", {}),
+            kwargs.get("servicio", _servicio()),
+            caja,
+        )
+
+    def test_caja_con_senal_reciente_acepta_pedidos(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=1))
+        self.assertTrue(estado["abierto"])
+        self.assertEqual(estado["motivo"], "abierto")
+
+    def test_caja_sin_senal_bloquea_pedidos(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=4))
+        self.assertFalse(estado["abierto"])
+        self.assertEqual(estado["motivo"], "caja_desconectada")
+        self.assertEqual(estado["mensaje"], horario.MENSAJE_CAJA_DESCONECTADA)
+        self.assertIsNone(estado["cierre_pedidos"])
+
+    def test_el_limite_exacto_todavia_cuenta_como_conectada(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=3))
+        self.assertTrue(estado["abierto"])
+
+    def test_ninguna_caja_conectada_todavia(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=None))
+        self.assertFalse(estado["abierto"])
+        self.assertEqual(estado["motivo"], "caja_desconectada")
+
+    def test_sin_migracion_la_regla_no_aplica(self):
+        estado = self._evaluar_con_caja(None)
+        self.assertTrue(estado["abierto"])
+
+    def test_regla_desactivada_con_cero_minutos(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=None, minutos=0))
+        self.assertTrue(estado["abierto"])
+
+    def test_fuera_de_horario_se_informa_el_horario(self):
+        """De noche es más útil decir cuándo abrimos que hablar de la caja."""
+        ahora = _momento(LUNES, 22)
+        estado = self._evaluar_con_caja(_caja(minutos_atras=None, ahora=ahora), ahora=ahora)
+        self.assertEqual(estado["motivo"], "despues_de_cerrar")
+        self.assertIsNotNone(estado["proxima_apertura"])
+
+    def test_servicio_pausado_tiene_prioridad(self):
+        estado = self._evaluar_con_caja(
+            _caja(minutos_atras=None), servicio=_servicio(activo=False, mensaje="Mantenimiento")
+        )
+        self.assertEqual(estado["motivo"], "servicio_pausado")
+
+    def test_sin_horario_tambien_exige_la_caja(self):
+        estado = self._evaluar_con_caja(_caja(minutos_atras=10), horarios={})
+        self.assertFalse(estado["abierto"])
+        self.assertEqual(estado["motivo"], "caja_desconectada")
+
+    def test_estado_menu_lee_la_senal(self):
+        conexion, _ = _conexion_simulada(
+            fetchone=[
+                {"Ahora": datetime(2026, 10, 5, 22, 0, 0)},  # 16:00 en el local
+                {"MenuActivo": 1, "MensajeMenu": None, "MinutosAntesCierre": 15},
+                {"UltimaSenalCaja": datetime(2026, 10, 5, 15, 50, 0)},
+            ],
+            fetchall=[PruebasEstadoMenu()._filas_horario(), []],
+        )
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch.object(horario, "MINUTOS_SENAL_CAJA", 3):
+            estado = horario.estado_menu()
+
+        self.assertFalse(estado["abierto"])
+        self.assertEqual(estado["motivo"], "caja_desconectada")
+
+    def test_sin_columnas_de_la_migracion_no_apaga_el_menu(self):
+        conexion, cursor = _conexion_simulada(
+            fetchone=[
+                {"Ahora": datetime(2026, 10, 5, 22, 0, 0)},
+                {"MenuActivo": 1, "MensajeMenu": None, "MinutosAntesCierre": 15},
+            ],
+            fetchall=[PruebasEstadoMenu()._filas_horario(), []],
+        )
+
+        def ejecutar(sql, *args):
+            if "UltimaSenalCaja" in sql:
+                raise RuntimeError("Unknown column 'UltimaSenalCaja'")
+
+        cursor.execute.side_effect = ejecutar
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch.object(horario, "MINUTOS_SENAL_CAJA", 3):
+            estado = horario.estado_menu()
+
+        self.assertTrue(estado["abierto"])
+
+
+class PruebasRegistrarSenal(unittest.TestCase):
+    """CP-HOR-45 a CP-HOR-49: la caja registra su señal."""
+
+    def test_senal_normal_solo_actualiza_la_hora(self):
+        conexion, cursor = _conexion_simulada(
+            fetchone=[
+                {"Ahora": datetime(2026, 10, 5, 22, 0, 0)},
+                {"UltimaSenalCaja": datetime(2026, 10, 5, 15, 59, 0)},
+            ]
+        )
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch.object(horario, "MINUTOS_SENAL_CAJA", 3):
+            self.assertTrue(horario.registrar_senal_caja())
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("SET UltimaSenalCaja = %s", sql)
+        self.assertNotIn("InicioDesconexionCaja", sql)
+        self.assertEqual(parametros, (datetime(2026, 10, 5, 16, 0, 0),))
+        conexion.commit.assert_called_once()
+
+    def test_despues_de_un_corte_guarda_el_periodo_sin_senal(self):
+        conexion, cursor = _conexion_simulada(
+            fetchone=[
+                {"Ahora": datetime(2026, 10, 5, 22, 0, 0)},
+                {"UltimaSenalCaja": datetime(2026, 10, 5, 15, 20, 0)},
+            ]
+        )
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch.object(horario, "MINUTOS_SENAL_CAJA", 3):
+            self.assertTrue(horario.registrar_senal_caja())
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("InicioDesconexionCaja = %s", sql)
+        self.assertEqual(
+            parametros,
+            (
+                datetime(2026, 10, 5, 16, 0, 0),
+                datetime(2026, 10, 5, 15, 20, 0),
+                datetime(2026, 10, 5, 16, 0, 0),
+            ),
+        )
+
+    def test_primera_senal_no_registra_corte(self):
+        conexion, cursor = _conexion_simulada(
+            fetchone=[{"Ahora": datetime(2026, 10, 5, 22, 0, 0)}, {"UltimaSenalCaja": None}]
+        )
+        with patch(_GET_CONNECTION, return_value=conexion):
+            self.assertTrue(horario.registrar_senal_caja())
+        self.assertNotIn("InicioDesconexionCaja", cursor.execute.call_args.args[0])
+
+    def test_sin_internet_devuelve_false(self):
+        with patch(_GET_CONNECTION, side_effect=ConnectionError("sin red")):
+            self.assertFalse(horario.registrar_senal_caja())
+
+    def test_lee_el_ultimo_periodo_sin_senal(self):
+        inicio, fin = datetime(2026, 10, 5, 15, 20), datetime(2026, 10, 5, 16, 0)
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {"InicioDesconexionCaja": inicio, "FinDesconexionCaja": fin}
+        self.assertEqual(horario.ultima_desconexion_caja(cursor), (inicio, fin))
+
+        cursor.fetchone.return_value = {"InicioDesconexionCaja": None, "FinDesconexionCaja": None}
+        self.assertIsNone(horario.ultima_desconexion_caja(cursor))
+
+        cursor.execute.side_effect = RuntimeError("Unknown column")
+        self.assertIsNone(horario.ultima_desconexion_caja(cursor))
+
+
 if __name__ == "__main__":
     unittest.main()

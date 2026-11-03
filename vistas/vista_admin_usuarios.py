@@ -2,7 +2,8 @@ import flet as ft
 from configuracion.base_datos import get_connection
 from configuracion.variables import ROL_CLIENTE
 from servicios import servicio_seguridad as seguridad
-from componentes.sidebar_admin import build_admin_sidebar
+from componentes.appbar_admin import build_admin_appbar
+from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
 
 from validaciones.validacion_personas import (
@@ -637,11 +638,7 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
         ),
     )
 
-    appbar = ft.AppBar(
-        title=ft.Text("Corallie Bubble - Admin"),
-        bgcolor="#C86DD7",
-        color="white",
-    )
+    appbar = build_admin_appbar(page, "Corallie Bubble - Admin")
 
     sidebar = build_admin_sidebar(
         page=page,
@@ -653,12 +650,6 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
         cerrar_sesion_real=cerrar_sesion,
     )
 
-    layout = ft.Row(
-        [
-            sidebar,
-            content,
-        ],
-        expand=True,
-    )
+    layout = admin_layout(page, sidebar, content)
 
     return ft.View(route="/admin_usuarios", controls=[layout], appbar=appbar)

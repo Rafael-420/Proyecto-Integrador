@@ -3,7 +3,7 @@ from time import monotonic
 
 import flet as ft
 
-from componentes.sidebar_menu import build_menu_sidebar
+from componentes.sidebar_menu import build_menu_sidebar, menu_layout
 from componentes.tarjeta_producto import tarjeta_producto
 from componentes.dialogo_personalizacion import abrir_dialogo_personalizacion
 from componentes.tarjeta_pedido import (
@@ -26,6 +26,7 @@ from servicios.servicio_menu import (
 )
 from servicios.servicio_horario import estado_menu
 from utilidades.formato import formatear_dinero
+from utilidades.flet_compat import set_texto_boton
 
 
 # ------------------------------------------------------------
@@ -570,7 +571,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         lbl_aviso_local_icono.value = icono_estado_local()
         lbl_aviso_local.value = estado_local["mensaje"] or ""
         btn_realizar_pedido.disabled = not abierto
-        btn_realizar_pedido.text = "Realizar pedido" if abierto else "Pedidos cerrados"
+        set_texto_boton(btn_realizar_pedido, "Realizar pedido" if abierto else "Pedidos cerrados")
         btn_realizar_pedido.bgcolor = COLOR_LILA if abierto else "#CDBFD6"
 
     def refrescar_estado_local(forzar: bool = False):
@@ -892,7 +893,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
 
             pedido_en_proceso["value"] = True
             btn_confirmar.disabled = True
-            btn_confirmar.text = "Registrando..."
+            set_texto_boton(btn_confirmar, "Registrando...")
             btn_cancelar.disabled = True
             page.update()
 
@@ -1688,15 +1689,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         spacing=0,
     )
 
-    layout = ft.Row(
-        controls=[
-            sidebar,
-            contenido_principal,
-        ],
-        expand=True,
-        spacing=0,
-        vertical_alignment=ft.CrossAxisAlignment.STRETCH,
-    )
+    layout = menu_layout(page, sidebar, contenido_principal)
 
     # --------------------------------------------------------
     # Primera carga

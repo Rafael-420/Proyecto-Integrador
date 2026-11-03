@@ -12,6 +12,13 @@ Cambios respecto a la version local:
 
 La firma de get_connection() no cambio: el resto del proyecto no
 requiere ninguna modificacion.
+
+Sin internet:
+  - get_connection() ya no reintenta con conexion directa cuando el
+    error es de red (antes la pantalla esperaba el tiempo limite dos
+    veces).
+  - hay_conexion() hace una verificacion rapida para el login, que
+    muestra la pantalla "Sin conexion" en lugar de dejar entrar.
 """
 
 from contextlib import contextmanager
@@ -29,6 +36,7 @@ from configuracion.variables import (
     DB_USAR_POOL,
     DB_POOL_SIZE,
     DB_TIMEOUT,
+    DB_TIMEOUT_VERIFICACION,
 )
 
 _NOMBRE_POOL = "corallie_pool"
@@ -71,6 +79,25 @@ def _conexion_directa():
     return mysql.connector.connect(**_parametros_conexion())
 
 
+# Codigos de mysql-connector que significan "no hay red o el servidor no
+# responde". Con estos errores no tiene caso reintentar de inmediato.
+_ERRORES_DE_RED = {
+    2002,  # no se pudo abrir el socket
+    2003,  # no se puede conectar al servidor
+    2005,  # host desconocido (sin DNS, normalmente sin internet)
+    2006,  # el servidor se fue
+    2013,  # se perdio la conexion durante la consulta
+    2055,  # se perdio la conexion con el servidor
+}
+
+
+def es_error_de_red(error: BaseException) -> bool:
+    """True si el error se debe a falta de conexion y no a un dato o a la consulta."""
+    if getattr(error, "errno", None) in _ERRORES_DE_RED:
+        return True
+    return isinstance(error, (OSError, TimeoutError, ConnectionError))
+
+
 def get_connection():
     """Devuelve una conexion lista para usar.
 
@@ -82,10 +109,46 @@ def get_connection():
 
     try:
         return _obtener_pool().get_connection()
-    except Exception:
+    except Exception as error:
+        # Sin internet no se intenta la conexion directa: fallaria igual
+        # y la pantalla esperaria el tiempo limite dos veces.
+        if es_error_de_red(error):
+            raise
         # Pool agotado, no disponible o error al crearlo:
         # se abre una conexion normal para no bloquear la aplicacion.
         return _conexion_directa()
+
+
+def hay_conexion(timeout: int | None = None) -> bool:
+    """Verificacion rapida: True si el servidor de base de datos responde.
+
+    La usa el login antes de pedir usuario y contrasena. Abre una conexion
+    directa (sin pool) con un tiempo limite corto, para que sin internet
+    la respuesta llegue en segundos y no se congele la pantalla.
+    """
+    parametros = _parametros_conexion()
+    parametros["connection_timeout"] = int(timeout or DB_TIMEOUT_VERIFICACION)
+    conn = None
+    cur = None
+    try:
+        conn = mysql.connector.connect(**parametros)
+        cur = conn.cursor()
+        cur.execute("SELECT 1")
+        cur.fetchall()
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            if cur is not None:
+                cur.close()
+        except Exception:
+            pass
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
 
 
 def probar_conexion() -> tuple[bool, str]:

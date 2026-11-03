@@ -116,6 +116,25 @@ def snack(page: ft.Page, texto: str, ok: bool = True):
 # Estas funciones escriben y leen el error sin importar la versión, para
 # que las vistas no tengan que saber en cuál se está ejecutando.
 
+def _atributo_error(campo) -> str:
+    """Nombre de la propiedad que este control dibuja como error.
+
+    Antes se intentaba asignar error_text y, si "no fallaba", se daba
+    por bueno. Pero en Flet 0.80 la asignación NO falla: Python guarda
+    el atributo en el objeto, Flet no lo envía y el mensaje nunca se
+    ve. Por eso las validaciones del registro no aparecían.
+
+    Se decide por lo que declara la CLASE del control:
+      - Flet 0.28: TextField declara error_text (y error); se dibuja
+        error_text.
+      - Flet 0.80+: TextField solo declara error; Dropdown todavía
+        declara error_text.
+    """
+    if hasattr(type(campo), "error_text"):
+        return "error_text"
+    return "error"
+
+
 def _asignar(campo, atributo, valor) -> bool:
     """Intenta asignar el atributo y confirma que quedó puesto."""
     try:
@@ -131,21 +150,17 @@ def _asignar(campo, atributo, valor) -> bool:
 def set_error(campo, mensaje=None):
     """Marca (o limpia, con mensaje None) el error de un campo.
 
-    No se usa hasattr para decidir: en las versiones nuevas de Flet el
-    control rechaza los atributos que no declara y hasattr no lo
-    anticipa, lo que tumbaba la app con "'TextField' object has no
-    attribute 'error_text'". Aquí se intenta asignar y se comprueba el
-    resultado, así funciona en cualquier versión.
+    La propiedad se elige según lo que declara la clase del control
+    (ver _atributo_error); si asignarla falla, se intenta la otra.
     """
     if campo is None:
         return
 
     texto = mensaje if mensaje else None
 
-    # error_text primero: en Flet 0.28 las dos propiedades existen, pero
-    # la que realmente se dibuja bajo el campo es error_text. En las
-    # versiones nuevas asignarla falla y entonces se usa error.
-    for atributo in ("error_text", "error"):
+    principal = _atributo_error(campo)
+    respaldo = "error" if principal == "error_text" else "error_text"
+    for atributo in (principal, respaldo):
         if _asignar(campo, atributo, texto):
             return
 
@@ -160,8 +175,25 @@ def get_error(campo):
     """Devuelve el mensaje de error del campo, o None si no tiene."""
     if campo is None:
         return None
-    for atributo in ("error_text", "error"):
-        valor = getattr(campo, atributo, None)
-        if valor:
-            return valor
-    return None
+    try:
+        valor = getattr(campo, _atributo_error(campo), None)
+    except Exception:
+        valor = None
+    return valor or None
+
+
+# ------------------------------------------------------------
+# Texto de botones
+# ------------------------------------------------------------
+# Hasta Flet 0.2x el texto de un botón vivía en .text; desde 0.80 vive
+# en .content. Asignar .text en 0.80 no falla, pero el botón no cambia.
+
+def set_texto_boton(boton, texto: str):
+    """Cambia el texto visible de un botón en cualquier versión de Flet."""
+    if boton is None:
+        return
+    atributo = "text" if hasattr(type(boton), "text") else "content"
+    try:
+        setattr(boton, atributo, texto)
+    except Exception:
+        pass

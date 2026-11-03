@@ -7,7 +7,12 @@ Así la vista se mantiene más limpia y sólo se encarga de construir la interfa
 import re
 
 from configuracion.base_datos import get_connection
-from servicios.servicio_horario import ahora_servidor, estado_menu, hora_local
+from servicios.servicio_horario import (
+    ahora_servidor,
+    estado_menu,
+    hora_local,
+    ultima_desconexion_caja,
+)
 
 
 # --------------------------------------------------------
@@ -324,6 +329,12 @@ def marcar_no_recogidos_vencidos(minutos: int = MINUTOS_PARA_NO_RECOGIDO) -> int
     da la hora del servidor MySQL (UTC en Railway) mientras que
     FechaPedido/HoraPedido están en hora del local, y con esa diferencia
     de 6 horas los pedidos se marcaban como no recogidos al instante.
+
+    Sin internet en el local: si el tiempo de espera de un pedido se
+    cruzó con el último periodo en que la caja estuvo sin señal, no se
+    marca solo. Nadie en el local pudo ver ese pedido, así que no es
+    justo bloquear al cliente; el empleado lo revisa y, si corresponde,
+    lo marca a mano.
     """
     conn = None
     cur = None
@@ -331,16 +342,29 @@ def marcar_no_recogidos_vencidos(minutos: int = MINUTOS_PARA_NO_RECOGIDO) -> int
         conn = get_connection()
         cur = conn.cursor()
         ahora = ahora_servidor(cur)
-        cur.execute(
-            """
+        desconexion = ultima_desconexion_caja(cur)
+
+        sql = """
             UPDATE generarpedido
             SET Estatus = 'No recogido',
                 EstatusPedido_IdEstatusPedido = %s
             WHERE EstatusPedido_IdEstatusPedido = %s
               AND TIMESTAMPADD(MINUTE, %s, TIMESTAMP(FechaPedido, HoraPedido)) < %s
-            """,
-            (ESTATUS_NO_RECOGIDO, ESTATUS_PEDIDO_REALIZADO, int(minutos), ahora),
-        )
+            """
+        parametros = (ESTATUS_NO_RECOGIDO, ESTATUS_PEDIDO_REALIZADO, int(minutos), ahora)
+
+        if desconexion is not None:
+            inicio, fin = desconexion
+            # Solo se marcan los pedidos que no esperaron durante la
+            # desconexión: los que se hicieron después de que volvió la
+            # señal, o los que vencieron antes de que se perdiera.
+            sql += """
+              AND (TIMESTAMP(FechaPedido, HoraPedido) >= %s
+                   OR TIMESTAMPADD(MINUTE, %s, TIMESTAMP(FechaPedido, HoraPedido)) <= %s)
+            """
+            parametros += (fin, int(minutos), inicio)
+
+        cur.execute(sql, parametros)
         conn.commit()
         return int(cur.rowcount or 0)
     except Exception:

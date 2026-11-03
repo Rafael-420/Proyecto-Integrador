@@ -3,6 +3,11 @@ from datetime import datetime
 
 import flet as ft
 
+from componentes.layout_sidebar import (
+    es_pantalla_angosta,
+    layout_con_sidebar,
+    registrar_sidebar,
+)
 from configuracion.base_datos import get_connection
 from servicios import servicio_seguridad as seguridad
 from servicios.corte_manager import obtener_info_corte, resumen_por_corte, cerrar_corte
@@ -52,6 +57,9 @@ ICON_REPORT = _icon("ASSESSMENT", "ANALYTICS", "BAR_CHART")
 ICON_MORE = _icon("MORE_HORIZ", "MORE_VERT")
 ICON_LOGOUT = _icon("LOGOUT", "EXIT_TO_APP")
 ICON_SAVE = _icon("SAVE", "CHECK")
+
+ANCHO_RIEL = 76
+ANCHO_ABIERTO = 240
 
 
 def build_sidebar(
@@ -750,12 +758,13 @@ def build_sidebar(
     # ------------------------------------------------------------
     # Construcción UI
     # ------------------------------------------------------------
-    # Responsive: ya existía el botón de colapsar, pero siempre arrancaba
-    # expandido (240px), sin importar el tamaño de pantalla. Ahora arranca
-    # colapsado automáticamente en pantallas angostas (celular/tablet).
-    ancho_pagina = getattr(page, "width", None)
-    sidebar_state = {"collapsed": bool(ancho_pagina and ancho_pagina < 700)}
+    # Responsive: arranca plegado en pantallas angostas (celular). Ahí,
+    # al abrirlo se monta encima del contenido y se esconde al tocar
+    # fuera o al elegir una opción (ver componentes/layout_sidebar.py).
+    angosto = es_pantalla_angosta(page)
+    sidebar_state = {"collapsed": angosto}
     nav_text_refs = []
+    oyentes = []
 
     avatar_txt = ft.Text((nombre[:1] or "U").upper(), weight="bold", color="#6C2BD9")
     avatar = ft.Container(
@@ -879,7 +888,7 @@ def build_sidebar(
     def aplicar_estado_sidebar():
         collapsed = sidebar_state["collapsed"]
 
-        sidebar.width = 76 if collapsed else 240
+        sidebar.width = ANCHO_RIEL if collapsed else ANCHO_ABIERTO
         sidebar.padding = 12 if collapsed else 16
 
         user_info.visible = not collapsed
@@ -896,20 +905,48 @@ def build_sidebar(
         for t in nav_text_refs:
             t.visible = not collapsed
 
-    def toggle_sidebar(e=None):
-        sidebar_state["collapsed"] = not sidebar_state["collapsed"]
+    def fijar_estado(colapsado: bool):
+        sidebar_state["collapsed"] = colapsado
         aplicar_estado_sidebar()
+        for oyente in list(oyentes):
+            try:
+                oyente(colapsado)
+            except Exception:
+                pass
+
+    def toggle_sidebar(e=None):
+        fijar_estado(not sidebar_state["collapsed"])
         page.update()
 
+    def colapsar(e=None):
+        if not sidebar_state["collapsed"]:
+            fijar_estado(True)
+            page.update()
+
+    def al_tocar(accion):
+        """En celular, el sidebar se esconde antes de ejecutar la opción."""
+
+        def manejador(e=None):
+            if angosto and not sidebar_state["collapsed"]:
+                fijar_estado(True)
+            if accion is not None:
+                accion(e)
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        return manejador
+
     nav_controls = [
-        nav_item(ICON_HOME, "Inicio", ir_inicio),
-        nav_item(ICON_BOX, "Ver inventario", ir_inventario),
-        nav_item(ICON_SWAP, "Entradas y salidas", ir_movimientos),
-        nav_item(ICON_WALLET, "Caja chica", ir_caja_chica),
+        nav_item(ICON_HOME, "Inicio", al_tocar(ir_inicio)),
+        nav_item(ICON_BOX, "Ver inventario", al_tocar(ir_inventario)),
+        nav_item(ICON_SWAP, "Entradas y salidas", al_tocar(ir_movimientos)),
+        nav_item(ICON_WALLET, "Caja chica", al_tocar(ir_caja_chica)),
     ]
 
     if ir_reportes is not None:
-        nav_controls.append(nav_item(ICON_REPORT, "Generar reportes", ir_reportes))
+        nav_controls.append(nav_item(ICON_REPORT, "Generar reportes", al_tocar(ir_reportes)))
 
     header_row = ft.Row(
         [ft.IconButton(icon=ICON_MENU, icon_color="white", on_click=toggle_sidebar), ft.Container(expand=True)]
@@ -930,11 +967,28 @@ def build_sidebar(
                 ft.Container(height=10),
                 ft.Column(nav_controls, spacing=6),
                 ft.Container(expand=True),
-                nav_item(ICON_LOGOUT, "Cerrar sesión", confirmar_cierre),
+                nav_item(ICON_LOGOUT, "Cerrar sesión", al_tocar(confirmar_cierre)),
             ],
             spacing=6,
         ),
     )
 
     aplicar_estado_sidebar()
+    registrar_sidebar(
+        sidebar,
+        angosto=angosto,
+        ancho_riel=ANCHO_RIEL,
+        esta_colapsado=lambda: sidebar_state["collapsed"],
+        colapsar=colapsar,
+        escuchar=oyentes.append,
+    )
     return sidebar
+
+
+def sidebar_layout(page: ft.Page, sidebar: ft.Control, contenido: ft.Control, espaciado=None) -> ft.Control:
+    """Acomoda el sidebar del empleado y el contenido de la pantalla.
+
+    En escritorio van lado a lado. En celular el sidebar se monta encima
+    del contenido, con un velo que lo cierra al tocar fuera.
+    """
+    return layout_con_sidebar(page, sidebar, contenido, espaciado=espaciado)

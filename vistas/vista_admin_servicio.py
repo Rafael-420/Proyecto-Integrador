@@ -16,7 +16,8 @@ servicios/servicio_horario.py.
 
 import flet as ft
 
-from componentes.sidebar_admin import build_admin_sidebar
+from componentes.appbar_admin import build_admin_appbar
+from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from servicios.servicio_horario import (
     DIAS_SEMANA,
     LARGO_MENSAJE_MAXIMO,
@@ -32,7 +33,7 @@ from servicios.servicio_horario import (
     parsear_fecha,
     parsear_hora,
 )
-from utilidades.flet_compat import abrir_dialogo, cerrar_dialogo, icono
+from utilidades.flet_compat import abrir_dialogo, cerrar_dialogo, icono, set_error
 
 
 COLOR_PRINCIPAL = "#C86DD7"
@@ -74,14 +75,14 @@ def _usuario_sesion(page: ft.Page, respaldo: str) -> str:
     return respaldo or "Administrador"
 
 
-def _tarjeta(titulo: str, subtitulo: str | None, *controles) -> ft.Container:
+def _tarjeta(titulo: str, subtitulo: str | None, *controles, relleno: int = 20) -> ft.Container:
     encabezado = [ft.Text(titulo, size=17, weight=ft.FontWeight.BOLD, color=COLOR_TEXTO)]
     if subtitulo:
         encabezado.append(ft.Text(subtitulo, size=13, color=COLOR_TEXTO_SUAVE))
     return ft.Container(
         bgcolor="white",
         border_radius=20,
-        padding=20,
+        padding=relleno,
         border=ft.border.all(1, "#EEE3F3"),
         content=ft.Column(
             controls=[ft.Column(encabezado, spacing=2), *controles],
@@ -91,11 +92,21 @@ def _tarjeta(titulo: str, subtitulo: str | None, *controles) -> ft.Container:
 
 
 def _marcar_error(campo: ft.TextField, mensaje: str | None):
-    campo.error_text = mensaje
+    # set_error elige la propiedad que dibuja cada versión de Flet
+    # (error_text en 0.28, error en 0.80+).
+    set_error(campo, mensaje)
 
 
 def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
     usuario_admin = _usuario_sesion(page, nombre)
+
+    # Responsive, igual que en inventario: menos relleno en el celular y
+    # filas que se acomodan en columnas (ResponsiveRow) en lugar de
+    # anchos fijos. En el celular el sidebar se abre encima del
+    # contenido (admin_layout), así que el contenido conserva su ancho.
+    ancho_pagina = getattr(page, "width", None) or 1200
+    es_movil = ancho_pagina < 700
+    relleno = 14 if es_movil else 20
 
     contenido = ft.Column(spacing=16, scroll=ft.ScrollMode.AUTO, expand=True)
 
@@ -140,31 +151,44 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
             detalle = f"Los clientes ven: «{estado['mensaje']}»"
             titulo, color, fondo, emoji = "Sin recibir pedidos", COLOR_ROJO, COLOR_AMBAR_FONDO, "🔴"
 
+        # Antes el emoji, el texto y el botón iban en una sola fila; con
+        # poco ancho el texto se mostraba una letra por renglón. Ahora el
+        # título va en su propio renglón y el detalle ocupa todo el ancho.
         return ft.Container(
             bgcolor=fondo,
             border_radius=20,
-            padding=20,
+            padding=relleno,
             border=ft.border.all(1, "#EEE3F3"),
-            content=ft.Row(
+            content=ft.Column(
                 controls=[
-                    ft.Text(emoji, size=26),
-                    ft.Column(
+                    ft.Row(
                         controls=[
-                            ft.Text(f"Menú de clientes: {titulo}", size=17, weight=ft.FontWeight.BOLD, color=color),
-                            ft.Text(detalle, size=13, color=COLOR_TEXTO),
-                            ft.Text(f"Hora del local: {hora_texto}", size=12, color=COLOR_TEXTO_SUAVE),
+                            ft.Text(
+                                "Menú de clientes",
+                                size=12,
+                                weight=ft.FontWeight.BOLD,
+                                color=COLOR_TEXTO_SUAVE,
+                                expand=True,
+                            ),
+                            ft.IconButton(
+                                icon=icono("REFRESH", "AUTORENEW"),
+                                tooltip="Actualizar",
+                                on_click=recargar,
+                            ),
                         ],
-                        spacing=3,
-                        expand=True,
+                        spacing=4,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
-                    ft.IconButton(
-                        icon=icono("REFRESH", "AUTORENEW"),
-                        tooltip="Actualizar",
-                        on_click=recargar,
+                    ft.Text(
+                        f"{emoji} {titulo}",
+                        size=17,
+                        weight=ft.FontWeight.BOLD,
+                        color=color,
                     ),
+                    ft.Text(detalle, size=13, color=COLOR_TEXTO),
+                    ft.Text(f"Hora del local: {hora_texto}", size=12, color=COLOR_TEXTO_SUAVE),
                 ],
-                spacing=14,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=4,
             ),
         )
 
@@ -175,12 +199,21 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
         servicio = config["servicio"]
 
         sw_activo = ft.Switch(
-            label="Recibir pedidos desde el menú",
             value=servicio["menu_activo"],
             active_color=COLOR_PRINCIPAL,
         )
+        # El texto va aparte del Switch para que pueda partirse en
+        # renglones; como etiqueta del Switch se cortaba en pantalla angosta.
+        fila_switch = ft.Row(
+            controls=[
+                sw_activo,
+                ft.Text("Recibir pedidos desde el menú", size=14, color=COLOR_TEXTO, expand=True),
+            ],
+            spacing=8,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        )
         txt_mensaje = ft.TextField(
-            label="Mensaje para los clientes mientras está pausado",
+            label="Mensaje para los clientes",
             hint_text="Ej. Cerrado por mantenimiento, volvemos a las 4 pm.",
             value=servicio.get("mensaje") or "",
             max_length=LARGO_MENSAJE_MAXIMO,
@@ -189,10 +222,9 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
             max_lines=3,
         )
         txt_margen = ft.TextField(
-            label="Dejar de recibir pedidos (minutos antes del cierre)",
+            label="Minutos antes del cierre",
             value=str(servicio.get("margen", MARGEN_CIERRE_DEFECTO)),
             keyboard_type=ft.KeyboardType.NUMBER,
-            width=360,
         )
 
         ultimo_cambio = []
@@ -245,9 +277,19 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
         return _tarjeta(
             "Servicio de pedidos del menú",
             "Pausa los pedidos en cualquier momento, sin importar el horario.",
-            sw_activo,
+            fila_switch,
             txt_mensaje,
-            txt_margen,
+            ft.Column(
+                controls=[
+                    txt_margen,
+                    ft.Text(
+                        "Tiempo antes de cerrar en que se dejan de recibir pedidos.",
+                        size=12,
+                        color=COLOR_TEXTO_SUAVE,
+                    ),
+                ],
+                spacing=4,
+            ),
             *ultimo_cambio,
             ft.Row(
                 controls=[
@@ -261,6 +303,7 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
                 ],
                 alignment=ft.MainAxisAlignment.END,
             ),
+            relleno=relleno,
         )
 
     # --------------------------------------------------------
@@ -276,18 +319,22 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
             txt_abre = ft.TextField(
                 label="Abre",
                 value=formatear_hora(datos["apertura"]) or "10:00",
-                width=110,
                 dense=True,
                 disabled=not datos["abierto"],
+                col={"xs": 6, "md": 4},
             )
             txt_cierra = ft.TextField(
                 label="Cierra",
                 value=formatear_hora(datos["cierre"]) or "21:00",
-                width=110,
                 dense=True,
                 disabled=not datos["abierto"],
+                col={"xs": 6, "md": 4},
             )
-            chk = ft.Checkbox(label=DIAS_SEMANA[dia], value=datos["abierto"], width=140)
+            chk = ft.Checkbox(
+                label=DIAS_SEMANA[dia],
+                value=datos["abierto"],
+                col={"xs": 12, "md": 4},
+            )
 
             def al_cambiar(e=None, a=txt_abre, c=txt_cierra, k=chk):
                 a.disabled = not k.value
@@ -296,11 +343,13 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
 
             chk.on_change = al_cambiar
             campos[dia] = (chk, txt_abre, txt_cierra)
+            # Con espacio: día y horas en una fila. En el celular: el día
+            # arriba y las dos horas debajo, mitad y mitad.
             filas.append(
-                ft.Row(
+                ft.ResponsiveRow(
                     controls=[chk, txt_abre, txt_cierra],
                     spacing=10,
-                    wrap=True,
+                    run_spacing=4,
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 )
             )
@@ -352,7 +401,7 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
             ft.Row(
                 controls=[
                     ft.ElevatedButton(
-                        "Guardar horario",
+                        "Guardar",
                         icon=icono("SAVE"),
                         bgcolor=COLOR_PRINCIPAL,
                         color="white",
@@ -361,6 +410,7 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
                 ],
                 alignment=ft.MainAxisAlignment.END,
             ),
+            relleno=relleno,
         )
 
     # --------------------------------------------------------
@@ -369,13 +419,19 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
     def tarjeta_dias_cerrados(config: dict) -> ft.Container:
         hoy = config["ahora"].date()
 
-        txt_fecha = ft.TextField(label="Fecha (DD/MM/AAAA)", width=190, dense=True)
+        txt_fecha = ft.TextField(
+            label="Fecha",
+            hint_text="DD/MM/AAAA",
+            keyboard_type=ft.KeyboardType.DATETIME,
+            dense=True,
+            col={"xs": 12, "md": 4},
+        )
         txt_motivo = ft.TextField(
             label="Motivo (opcional)",
             hint_text="Ej. Día festivo, vacaciones",
             max_length=LARGO_MOTIVO_MAXIMO,
             dense=True,
-            expand=True,
+            col={"xs": 12, "md": 5},
         )
 
         def agregar(e=None):
@@ -438,23 +494,30 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
         return _tarjeta(
             "Días cerrados",
             "Festivos, vacaciones o cierres imprevistos. Esos días el menú no recibe pedidos.",
-            ft.Row(
+            # Antes era un Row con wrap y un campo con expand=True: esa
+            # combinación no tiene ancho definido y Flutter dibujaba un
+            # recuadro gris en lugar del formulario.
+            ft.ResponsiveRow(
                 controls=[
                     txt_fecha,
                     txt_motivo,
-                    ft.ElevatedButton(
-                        "Agregar",
-                        icon=icono("ADD"),
-                        bgcolor=COLOR_PRINCIPAL,
-                        color="white",
-                        on_click=agregar,
+                    ft.Container(
+                        col={"xs": 12, "md": 3},
+                        content=ft.ElevatedButton(
+                            "Agregar",
+                            icon=icono("ADD"),
+                            bgcolor=COLOR_PRINCIPAL,
+                            color="white",
+                            on_click=agregar,
+                        ),
                     ),
                 ],
                 spacing=10,
-                wrap=True,
+                run_spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.START,
             ),
             *lista,
+            relleno=relleno,
         )
 
     # --------------------------------------------------------
@@ -472,6 +535,7 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
                     "recursos/sql/migracion_horario.sql.",
                     ft.Text(str(error), size=12, color=COLOR_ROJO, selectable=True),
                     ft.ElevatedButton("Reintentar", on_click=recargar),
+                    relleno=relleno,
                 )
             )
             actualizar()
@@ -554,16 +618,17 @@ def admin_servicio_view(page: ft.Page, nombre: str) -> ft.View:
     main_content = ft.Container(
         expand=True,
         bgcolor=COLOR_FONDO,
-        padding=20,
+        padding=12 if es_movil else 20,
         content=ft.Column(controls=[header, contenido], expand=True, spacing=14),
     )
 
-    layout = ft.Row([sidebar, main_content], expand=True)
+    layout = admin_layout(page, sidebar, main_content)
 
     recargar()
 
     return ft.View(
         route="/admin_servicio",
+        appbar=build_admin_appbar(page, "Corallie Bubble - Admin"),
         controls=[layout],
         bgcolor=COLOR_FONDO,
         padding=0,

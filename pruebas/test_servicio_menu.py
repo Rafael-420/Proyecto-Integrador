@@ -645,6 +645,29 @@ class PruebasMarcarNoRecogido(unittest.TestCase):
 
         self.assertEqual(cursor.execute.call_args.args[1][2], menu.MINUTOS_PARA_NO_RECOGIDO)
 
+    def test_no_marca_pedidos_que_esperaron_sin_internet(self):
+        """CP-MEN-59: un pedido que esperó mientras la caja no tenía señal no se marca solo."""
+        inicio, fin = datetime(2026, 10, 5, 13, 0), datetime(2026, 10, 5, 14, 0)
+        conexion, cursor = _conexion_simulada(rowcount=0)
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch("servicios.servicio_menu.ultima_desconexion_caja", return_value=(inicio, fin)):
+            menu.marcar_no_recogidos_vencidos(120)
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertIn("TIMESTAMP(FechaPedido, HoraPedido) >= %s", sql)
+        self.assertEqual(parametros[4:], (fin, 120, inicio))
+
+    def test_sin_periodo_sin_senal_se_marca_como_antes(self):
+        """CP-MEN-60."""
+        conexion, cursor = _conexion_simulada(rowcount=0)
+        with patch(_GET_CONNECTION, return_value=conexion), \
+                patch("servicios.servicio_menu.ultima_desconexion_caja", return_value=None):
+            menu.marcar_no_recogidos_vencidos(120)
+
+        sql, parametros = cursor.execute.call_args.args
+        self.assertNotIn(">= %s", sql)
+        self.assertEqual(len(parametros), 4)
+
     def test_pagar_en_el_local_desbloquea(self):
         conexion, cursor = _conexion_simulada(rowcount=1)
         with patch(_GET_CONNECTION, return_value=conexion):

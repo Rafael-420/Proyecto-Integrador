@@ -1,14 +1,16 @@
 import asyncio
+import threading
 from pathlib import Path
 
 import flet as ft
 
-from configuracion.base_datos import get_connection
+from configuracion.base_datos import es_error_de_red, get_connection, hay_conexion
 from servicios import servicio_autenticacion as autenticacion
 from servicios import servicio_seguridad as seguridad
 from vistas.vista_registro import RegistroView
 from servicios.corte_manager import abrir_corte
 from vistas.vista_admin import admin_view
+from servicios.senal_caja import detener_senal_caja, iniciar_senal_caja
 
 
 # ------------------------------------------------------------
@@ -57,6 +59,8 @@ ICON_ARROW = _icon("ARROW_FORWARD", "EAST", "CHEVRON_RIGHT")
 ICON_REGISTER = _icon("PERSON_ADD_ALT_1", "PERSON_ADD", "ADD")
 ICON_RESET = _icon("LOCK_RESET", "LOCK_OPEN", "HELP_OUTLINE")
 ICON_MAIL = _icon("MAIL_OUTLINE", "EMAIL", "ALTERNATE_EMAIL")
+ICON_SIN_RED = _icon("WIFI_OFF", "SIGNAL_WIFI_OFF", "CLOUD_OFF", "ERROR_OUTLINE")
+ICON_REINTENTAR = _icon("REFRESH", "AUTORENEW", "REPLAY")
 
 
 # ------------------------------------------------------------
@@ -128,8 +132,13 @@ def LoginView(page: ft.Page):
 
     origen_login = "movil" if es_movil else "escritorio"
 
+    # Llegar al login significa que la sesión anterior terminó (todas las
+    # formas de cerrar sesión vuelven aquí). Si era la caja de un
+    # empleado, deja de mandar la señal de "sigo aquí".
+    detener_senal_caja(page)
+
     # Estado interno de la pantalla
-    estado = {"cargando": False}
+    estado = {"cargando": False, "revisando": False}
 
     # --------------------------------------------------------
     # Campos
@@ -338,6 +347,10 @@ def LoginView(page: ft.Page):
                 await storage_set("usuario_id", int(usuario.id))
                 await storage_set("rol", usuario.rol)
 
+                # La caja empieza a avisar que el local está conectado;
+                # sin esa señal el menú de clientes no acepta pedidos.
+                iniciar_senal_caja(page)
+
                 page.go("/pos")
                 return
 
@@ -367,7 +380,10 @@ def LoginView(page: ft.Page):
             mostrar_mensaje("Tu usuario no está ligado a cliente ni empleado")
 
         except Exception as ex:
-            mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
+            if es_error_de_red(ex):
+                mostrar_sin_conexion()
+            else:
+                mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
 
         finally:
             try:
@@ -506,16 +522,34 @@ def LoginView(page: ft.Page):
         mostrar_mensaje("")
         marcar_cargando(True)
 
+        # Sin conexión nadie entra, sin importar si es administrador,
+        # empleado o cliente: el rol se conoce hasta validar contra la
+        # base de datos. Se revisa primero con un tiempo límite corto
+        # para no esperar el de cada consulta del login.
+        conectado = await en_segundo_plano(hay_conexion)
+        if not conectado:
+            marcar_cargando(False)
+            mostrar_sin_conexion()
+            return
+
         try:
             resultado = await en_segundo_plano(
                 autenticacion.autenticar, user, password, origen_login
             )
         except Exception as ex:
             marcar_cargando(False)
-            mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
+            if es_error_de_red(ex):
+                mostrar_sin_conexion()
+            else:
+                mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
             return
 
         marcar_cargando(False)
+
+        # La conexión se perdió entre la verificación y la consulta.
+        if not resultado.exito and resultado.motivo == "error_conexion":
+            mostrar_sin_conexion()
+            return
 
         if not resultado.exito:
             color = COLOR_AVISO if resultado.motivo == "bloqueado" else COLOR_ERROR
@@ -717,6 +751,173 @@ def LoginView(page: ft.Page):
         content=contenido_boton,
     )
 
+    formulario = ft.Column(
+        controls=[
+            input_user,
+            input_pass,
+            btn_login,
+            lbl_msg,
+            ft.Image(src=_img("separador.png"), width=min(280, ancho_campo)),
+            link_login("Registrarse", ICON_REGISTER, ir_registro),
+            link_login("Olvidé mi contraseña", ICON_RESET, olvidar),
+        ],
+        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=12,
+        tight=True,
+    )
+
+    # --------------------------------------------------------
+    # Pantalla "Sin conexión"
+    # --------------------------------------------------------
+    # Ocupa el lugar del formulario: sin conexión no se puede validar a
+    # nadie, así que no tiene caso pedir usuario y contraseña. El botón
+    # Reintentar vuelve a revisar y, si ya hay red, regresa el formulario.
+    lbl_sin_conexion = ft.Text(
+        "No pudimos comunicarnos con el servidor de Corallie Bubble. "
+        "Revisa tu conexión a internet e inténtalo de nuevo.",
+        size=15,
+        color=COLOR_TEXTO,
+        font_family="Fredoka",
+        text_align=ft.TextAlign.CENTER,
+    )
+
+    contenido_reintentar = ft.Row(
+        controls=[
+            ft.Icon(ICON_REINTENTAR, color="white", size=26)
+            if ICON_REINTENTAR is not None
+            else ft.Text("⟳", color="white", size=24),
+            ft.Text(
+                "Reintentar",
+                color="white",
+                size=20,
+                weight=ft.FontWeight.BOLD,
+                font_family="Fredoka",
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=14,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    contenido_reintentar_cargando = ft.Row(
+        controls=[
+            ft.ProgressRing(width=24, height=24, stroke_width=3, color="white"),
+            ft.Text(
+                "Revisando conexión...",
+                color="white",
+                size=18,
+                weight=ft.FontWeight.BOLD,
+                font_family="Fredoka",
+            ),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=16,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+
+    btn_reintentar = ft.Container(
+        width=ancho_campo,
+        height=62,
+        border_radius=31,
+        bgcolor=COLOR_MORADO,
+        ink=True,
+        content=contenido_reintentar,
+    )
+
+    panel_sin_conexion = ft.Container(
+        visible=False,
+        width=ancho_campo,
+        padding=ft.padding.only(top=6, bottom=6),
+        content=ft.Column(
+            controls=[
+                ft.Container(
+                    width=84,
+                    height=84,
+                    border_radius=42,
+                    bgcolor=COLOR_ICON_BG,
+                    alignment=ALIGN_CENTER,
+                    content=(
+                        ft.Icon(ICON_SIN_RED, color=COLOR_MORADO, size=44)
+                        if ICON_SIN_RED is not None
+                        else ft.Text("!", size=40, color=COLOR_MORADO)
+                    ),
+                ),
+                ft.Text(
+                    "Sin conexión a internet",
+                    size=24,
+                    weight=ft.FontWeight.BOLD,
+                    color=COLOR_MORADO,
+                    font_family="Fredoka",
+                    text_align=ft.TextAlign.CENTER,
+                ),
+                lbl_sin_conexion,
+                btn_reintentar,
+                ft.Text(
+                    "Si el problema continúa, revisa el módem o avisa al administrador.",
+                    size=12,
+                    color=COLOR_PLACEHOLDER,
+                    font_family="Fredoka",
+                    text_align=ft.TextAlign.CENTER,
+                ),
+            ],
+            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+            spacing=14,
+            tight=True,
+        ),
+    )
+
+    def _refrescar():
+        try:
+            page.update()
+        except Exception:
+            pass
+
+    def mostrar_sin_conexion():
+        lbl_sin_conexion.value = (
+            "No pudimos comunicarnos con el servidor de Corallie Bubble. "
+            "Revisa tu conexión a internet e inténtalo de nuevo."
+        )
+        formulario.visible = False
+        panel_sin_conexion.visible = True
+        _refrescar()
+
+    def mostrar_formulario():
+        panel_sin_conexion.visible = False
+        formulario.visible = True
+        _refrescar()
+
+    def marcar_revisando(activo: bool):
+        estado["revisando"] = activo
+        btn_reintentar.content = contenido_reintentar_cargando if activo else contenido_reintentar
+        btn_reintentar.bgcolor = COLOR_MORADO_CLARO if activo else COLOR_MORADO
+        _refrescar()
+
+    async def reintentar(e=None):
+        if estado["revisando"]:
+            return
+        marcar_revisando(True)
+        conectado = await en_segundo_plano(hay_conexion)
+        marcar_revisando(False)
+
+        if conectado:
+            mostrar_formulario()
+            mostrar_mensaje("Conexión restablecida. Ya puedes iniciar sesión.", COLOR_EXITO)
+        else:
+            lbl_sin_conexion.value = (
+                "Todavía no hay conexión. Revisa tu internet y vuelve a "
+                "intentarlo en unos segundos."
+            )
+            _refrescar()
+
+    btn_reintentar.on_click = reintentar
+
+    def _verificacion_inicial():
+        """Revisa la conexión al abrir el login, sin congelar la pantalla."""
+        if not hay_conexion():
+            mostrar_sin_conexion()
+
+    threading.Thread(target=_verificacion_inicial, daemon=True).start()
+
     card_login = ft.Container(
         width=ancho_card,
         border_radius=48,
@@ -754,13 +955,8 @@ def LoginView(page: ft.Page):
                     spacing=14,
                 ),
                 ft.Text("♥", size=22, color=COLOR_ROSA, text_align=ft.TextAlign.CENTER),
-                input_user,
-                input_pass,
-                btn_login,
-                lbl_msg,
-                ft.Image(src=_img("separador.png"), width=min(280, ancho_campo)),
-                link_login("Registrarse", ICON_REGISTER, ir_registro),
-                link_login("Olvidé mi contraseña", ICON_RESET, olvidar),
+                formulario,
+                panel_sin_conexion,
             ],
             horizontal_alignment=ft.CrossAxisAlignment.CENTER,
             spacing=12,

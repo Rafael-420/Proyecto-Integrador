@@ -2,7 +2,7 @@ import flet as ft
 import re
 from datetime import datetime
 from configuracion.base_datos import get_connection
-from componentes.sidebar import build_sidebar
+from componentes.sidebar import build_sidebar, sidebar_layout
 
 # ------------------------------------------------------------
 # Compatibilidad Flet 0.80 / 0.81
@@ -1080,11 +1080,7 @@ def inventario_view(page: ft.Page, nombre: str) -> ft.View:
         ),
     )
 
-    layout = ft.Row(
-        expand=True,
-        spacing=0,
-        controls=[sidebar, main_content],
-    )
+    layout = sidebar_layout(page, sidebar, main_content, espaciado=0)
 
     appbar = ft.AppBar(
         leading=ft.IconButton(icon=ICON_BACK, icon_color="white", on_click=volver_pos),
