@@ -90,6 +90,23 @@ SMTP_FROM_NAME = _leer("CORALLIE_SMTP_FROM_NAME", "Corallie Bubble")
 
 
 # ------------------------------------------------------------
+# Aviso de privacidad (LFPDPPP, DOF 20-mar-2025)
+# Usado por servicios/servicio_privacidad.py
+# ------------------------------------------------------------
+# Responsable del tratamiento: el equipo del proyecto academico.
+PRIVACIDAD_RESPONSABLE = _leer(
+    "CORALLIE_PRIVACIDAD_RESPONSABLE",
+    "Equipo de desarrollo del Proyecto Aplicado Integrador Corallie Bubble",
+)
+# Domicilio para oir y recibir notificaciones (obligatorio en el aviso).
+# Si se deja vacio, el aviso omite la linea: hay que llenarlo en el .env.
+PRIVACIDAD_DOMICILIO = _leer("CORALLIE_PRIVACIDAD_DOMICILIO", "")
+# Correo donde se reciben las solicitudes ARCO. Si no se define, se usa
+# la cuenta de correo del sistema (CORALLIE_SMTP_USER).
+PRIVACIDAD_CORREO = _leer("CORALLIE_PRIVACIDAD_CORREO", SMTP_USER)
+
+
+# ------------------------------------------------------------
 # Horario del local
 # ------------------------------------------------------------
 # Zona horaria en la que se interpreta el horario laboral y se

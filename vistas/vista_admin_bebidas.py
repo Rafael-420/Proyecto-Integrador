@@ -6,9 +6,13 @@ admin crea bebidas nuevas para el menú, las edita, les sube foto y las
 marca como agotadas cuando no se pueden vender.
 """
 
+from pathlib import Path
+
 import flet as ft
 
 from componentes.appbar_admin import build_admin_appbar
+from utilidades.flet_compat import set_error
+from utilidades.subida_archivos import borrar_subida, crear_selector, elegir_y_subir
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from servicios.servicio_bebidas import (
     listar_bebidas_admin,
@@ -71,7 +75,9 @@ def _show_snack(page: ft.Page, text: str, ok: bool = True):
 
 
 def _set_field_error(ctrl: ft.TextField, mensaje: str | None):
-    ctrl.error_text = mensaje
+    # set_error usa la propiedad que dibuja cada versión de Flet; con
+    # error_text los errores no se veían en Flet 0.80.
+    set_error(ctrl, mensaje)
     ctrl.border_color = "#EF4444" if mensaje else None
     ctrl.focused_border_color = "#EF4444" if mensaje else None
 
@@ -112,6 +118,10 @@ CATEGORIAS_SUGERIDAS = ["Milk Tea", "Especialidad", "Clásicos", "Smoothies", "F
 def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
     ancho_pagina = getattr(page, "width", None) or 1200
     es_movil = ancho_pagina < 700
+
+    # Un solo selector de archivos por pantalla (antes se creaba uno
+    # nuevo cada vez que se abría el formulario).
+    selector_imagen = crear_selector(page)
 
     grid_bebidas = ft.GridView(
         runs_count=3,
@@ -256,11 +266,11 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
         modo_edicion = bebida_existente is not None
         datos = bebida_existente or {}
 
-        nombre_f = ft.TextField(label="Nombre", width=420, border_radius=12, max_length=60, value=str(datos.get("Nombre", "")))
-        precio_f = ft.TextField(label="Precio", width=420, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER, value=str(datos.get("Precio", "")))
-        desc_f = ft.TextField(label="Descripción", width=420, border_radius=12, multiline=True, min_lines=2, max_lines=3, max_length=255, value=str(datos.get("Descripcion", "")))
+        nombre_f = ft.TextField(label="Nombre", border_radius=12, max_length=60, value=str(datos.get("Nombre", "")))
+        precio_f = ft.TextField(label="Precio", border_radius=12, keyboard_type=ft.KeyboardType.NUMBER, value=str(datos.get("Precio", "")))
+        desc_f = ft.TextField(label="Descripción", border_radius=12, multiline=True, min_lines=2, max_lines=3, max_length=255, value=str(datos.get("Descripcion", "")))
         cat_f = ft.Dropdown(
-            label="Categoría", width=420,
+            label="Categoría",
             value=str(datos.get("Categoria")) if datos.get("Categoria") in CATEGORIAS_SUGERIDAS else "General",
             options=[ft.dropdown.Option(c) for c in CATEGORIAS_SUGERIDAS],
         )
@@ -283,38 +293,34 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
             ft.Container(width=48, height=48, border_radius=14, bgcolor="#F5E8FF", alignment=ft.Alignment(0, 0), content=icono_imagen)
         )
 
-        file_picker = ft.FilePicker()
-        page.overlay.append(file_picker)
-
         async def elegir_imagen(ev=None):
-            # En esta versión de Flet, FilePicker.pick_files() ya no dispara
-            # un evento on_result: es async y devuelve la lista de archivos
-            # directamente.
+            # Antes se creaba un FilePicker y se agregaba a page.overlay.
+            # En Flet 0.80 eso dibuja "Unknown control: FilePicker", y en
+            # el navegador el archivo no trae ruta, así que la foto nunca
+            # se guardaba. elegir_y_subir() resuelve las dos cosas.
+            txt_imagen.value = "Subiendo foto..."
+            txt_imagen.color = "#7A7A7A"
+            page.update()
             try:
-                archivos = await file_picker.pick_files(
-                    allow_multiple=False,
-                    allowed_extensions=["png", "jpg", "jpeg", "webp"],
-                )
+                ruta = await elegir_y_subir(page, selector_imagen, ["png", "jpg", "jpeg", "webp"])
             except Exception as ex:
-                _show_snack(page, f"No se pudo abrir el explorador de archivos: {ex}", ok=False)
-                return
-
-            if not archivos:
-                return
-
-            archivo = archivos[0]
-            ruta = getattr(archivo, "path", None)
-            if ruta:
-                imagen_elegida["path"] = ruta
-                txt_imagen.value = f"Foto lista: {archivo.name}"
-                txt_imagen.color = "#16A34A"
-            else:
-                _show_snack(page, "No se pudo leer el archivo seleccionado.", ok=False)
-
-            try:
-                dlg.update()
-            except Exception:
+                txt_imagen.value = "No se pudo subir la foto"
+                txt_imagen.color = "#EF4444"
                 page.update()
+                _show_snack(page, str(ex), ok=False)
+                return
+
+            if not ruta:
+                txt_imagen.value = "Foto actual guardada" if imagen_actual else "Sin foto todavía"
+                txt_imagen.color = "#16A34A" if imagen_actual else "#7A7A7A"
+                page.update()
+                return
+
+            borrar_subida(imagen_elegida["path"])  # si ya había elegido otra
+            imagen_elegida["path"] = ruta
+            txt_imagen.value = f"Foto lista: {Path(ruta).name.split('_', 1)[-1]}"
+            txt_imagen.color = "#16A34A"
+            page.update()
 
         fila_imagen = ft.Row(
             controls=[
@@ -379,14 +385,23 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
                 else:
                     id_bebida = crear_bebida(nombre_v, precio_v, desc_v, cat_f.value)
 
+                foto_fallo = False
                 if imagen_elegida["path"]:
                     ruta_rel = guardar_archivo_imagen_bebida(imagen_elegida["path"], nombre_v)
+                    borrar_subida(imagen_elegida["path"])
+                    imagen_elegida["path"] = None
                     if ruta_rel:
                         guardar_imagen_bebida(id_bebida, ruta_rel)
+                    else:
+                        foto_fallo = True
 
                 _close_dialog(page, dlg)
                 recargar()
-                _show_snack(page, "Bebida actualizada correctamente" if modo_edicion else "Bebida creada correctamente")
+                mensaje = "Bebida actualizada correctamente" if modo_edicion else "Bebida creada correctamente"
+                if foto_fallo:
+                    _show_snack(page, f"{mensaje}, pero no se pudo guardar la foto.", ok=False)
+                else:
+                    _show_snack(page, mensaje)
             except Exception as ex:
                 _show_snack(page, f"Error al guardar: {ex}", ok=False)
 

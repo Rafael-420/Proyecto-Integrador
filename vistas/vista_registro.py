@@ -7,7 +7,9 @@ if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
 
 from configuracion.base_datos import get_connection
 from configuracion.variables import ROL_CLIENTE, ROL_EMPLEADO
+from servicios import servicio_privacidad as privacidad
 from servicios import servicio_seguridad as seguridad
+from componentes.dialogo_aviso_privacidad import mostrar_aviso_privacidad
 from utilidades.flet_compat import set_error, set_texto_boton, snack
 
 # -------------------------------------------------------------------
@@ -100,6 +102,48 @@ def RegistroView(page: ft.Page, tipo: str):
     # Mensaje general junto al botón. En el celular los campos con error
     # pueden quedar fuera de la pantalla; este aviso sí se ve.
     lbl_msg = ft.Text("", size=13, text_align=ft.TextAlign.CENTER)
+
+    # ------------------------------------------------------------------
+    # AVISO DE PRIVACIDAD (LFPDPPP)
+    # La casilla es obligatoria: sin consentimiento no se crea la cuenta.
+    # ------------------------------------------------------------------
+    chk_privacidad = ft.Checkbox(value=False, active_color="#C86DD7")
+    lbl_error_privacidad = ft.Text("", size=12, color="red", visible=False)
+
+    def alternar_privacidad(e):
+        chk_privacidad.value = not chk_privacidad.value
+        limpiar_error_privacidad(None)
+
+    def limpiar_error_privacidad(e):
+        if chk_privacidad.value:
+            lbl_error_privacidad.visible = False
+        page.update()
+
+    chk_privacidad.on_change = limpiar_error_privacidad
+
+    bloque_privacidad = ft.Column(
+        [
+            ft.Text(privacidad.texto_simplificado(), size=12, color="#6B7280"),
+            ft.Row(
+                [
+                    chk_privacidad,
+                    ft.Container(
+                        content=ft.Text("He leído y acepto el aviso de privacidad", size=13),
+                        expand=True,
+                        on_click=alternar_privacidad,
+                    ),
+                ],
+                spacing=4,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            ft.TextButton(
+                "Leer el aviso de privacidad completo",
+                on_click=lambda e: mostrar_aviso_privacidad(page),
+            ),
+            lbl_error_privacidad,
+        ],
+        spacing=2,
+    )
 
     btn_registrar = ft.ElevatedButton(
         "Registrarme",
@@ -213,6 +257,13 @@ def RegistroView(page: ft.Page, tipo: str):
             set_error(txt_pass2, "Las contraseñas no coinciden")
             valido = False
 
+        # --- Aviso de privacidad (consentimiento obligatorio)
+        error_privacidad = privacidad.mensaje_si_no_acepta(chk_privacidad.value)
+        lbl_error_privacidad.value = error_privacidad or ""
+        lbl_error_privacidad.visible = error_privacidad is not None
+        if error_privacidad:
+            valido = False
+
         if valido:
             mostrar_mensaje("")
         else:
@@ -299,6 +350,11 @@ def RegistroView(page: ft.Page, tipo: str):
                 (nombre, apellido, tel, correo, id_usuario),
             )
 
+            # Constancia del consentimiento, en la misma transacción:
+            # si algo falla, no queda ni la cuenta ni el consentimiento.
+            origen = "registro_cliente" if tipo == "Cliente" else "registro_empleado"
+            privacidad.registrar_consentimiento(cursor, id_usuario, origen)
+
             conn.commit()
 
             # page.snack_bar ya no existe en Flet 0.80; snack() usa la API
@@ -355,6 +411,7 @@ def RegistroView(page: ft.Page, tipo: str):
                 txt_usuario,
                 txt_pass,
                 txt_pass2,
+                bloque_privacidad,
                 lbl_msg,
                 btn_registrar,
                 ft.TextButton("Volver al login", on_click=volver_login),

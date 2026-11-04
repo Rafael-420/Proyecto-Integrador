@@ -10,10 +10,15 @@ agotado.
 import re
 import shutil
 from pathlib import Path
+
+from configuracion.variables import CARPETA_ASSETS
 from configuracion.base_datos import get_connection
 
 
-CARPETA_IMAGENES_BEBIDAS = Path("assets") / "bebidas"
+# Ruta absoluta: con Path("assets") la foto se copiaba a la carpeta
+# desde donde se hubiera iniciado la app, que no siempre es el proyecto,
+# y luego Flet no la encontraba.
+CARPETA_IMAGENES_BEBIDAS = CARPETA_ASSETS / "bebidas"
 
 
 def _cerrar_conexion(conn, cur):
