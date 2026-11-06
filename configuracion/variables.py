@@ -44,6 +44,21 @@ def _leer_bool(nombre: str, respaldo: bool) -> bool:
 
 
 # ------------------------------------------------------------
+# Rutas del proyecto
+# Absolutas, para que funcionen sin importar desde que carpeta se
+# inicie la aplicacion.
+# ------------------------------------------------------------
+RAIZ_PROYECTO = Path(__file__).resolve().parent.parent
+
+# Imagenes, fuentes y fotos de bebidas que sirve Flet (assets_dir).
+CARPETA_ASSETS = RAIZ_PROYECTO / "assets"
+
+# Archivos que sube el navegador antes de procesarlos (upload_dir).
+# Va fuera de assets para que lo subido no quede publicado tal cual.
+CARPETA_SUBIDAS = Path(_leer("CORALLIE_CARPETA_SUBIDAS", str(RAIZ_PROYECTO / "subidas")))
+
+
+# ------------------------------------------------------------
 # Base de datos
 # ------------------------------------------------------------
 DB_HOST = _leer("DB_HOST", "localhost")
