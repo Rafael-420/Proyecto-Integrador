@@ -7,10 +7,12 @@ import flet as ft
 from configuracion.base_datos import es_error_de_red, get_connection, hay_conexion
 from servicios import servicio_autenticacion as autenticacion
 from servicios import servicio_seguridad as seguridad
+from servicios import servicio_sesion as sesion
 from vistas.vista_registro import RegistroView
 from servicios.corte_manager import abrir_corte
 from vistas.vista_admin import admin_view
 from servicios.senal_caja import detener_senal_caja, iniciar_senal_caja
+from utilidades.errores import detalle_seguro
 
 
 # ------------------------------------------------------------
@@ -136,6 +138,9 @@ def LoginView(page: ft.Page):
     # formas de cerrar sesión vuelven aquí). Si era la caja de un
     # empleado, deja de mandar la señal de "sigo aquí".
     detener_senal_caja(page)
+    # Y borra la sesion: asi el boton "atras" del navegador o escribir
+    # una ruta en la barra ya no reabre las pantallas del usuario anterior.
+    sesion.cerrar_sesion(page)
 
     # Estado interno de la pantalla
     estado = {"cargando": False, "revisando": False}
@@ -310,8 +315,11 @@ def LoginView(page: ft.Page):
     async def continuar_sesion(usuario):
         """Decide a qué pantalla enviar al usuario ya autenticado."""
 
-        # Administrador
-        if usuario.es_admin or usuario.nombre_usuario.lower() == "admin":
+        # Administrador. El rol sale de la base de datos: antes también
+        # se daba acceso de administrador a cualquier cuenta llamada
+        # "admin", aunque su rol fuera otro.
+        if usuario.es_admin:
+            sesion.iniciar_sesion(page, usuario.id, usuario.rol)
             # Se guarda el usuario para registrar quién hace cambios
             # sensibles, como pausar el servicio de pedidos del menú.
             await storage_set("admin", usuario.nombre_usuario)
@@ -346,6 +354,9 @@ def LoginView(page: ft.Page):
                 await storage_set("empleado_id", int(id_empleado))
                 await storage_set("usuario_id", int(usuario.id))
                 await storage_set("rol", usuario.rol)
+                # El rol de la sesión sigue la misma regla que esta
+                # pantalla: quien está en la tabla empleado es empleado.
+                sesion.iniciar_sesion(page, usuario.id, sesion.ROL_EMPLEADO)
 
                 # La caja empieza a avisar que el local está conectado;
                 # sin esa señal el menú de clientes no acepta pedidos.
@@ -373,6 +384,7 @@ def LoginView(page: ft.Page):
                 await storage_set("cliente", nombre_cliente)
                 await storage_set("usuario_id", int(usuario.id))
                 await storage_set("rol", usuario.rol)
+                sesion.iniciar_sesion(page, usuario.id, sesion.ROL_CLIENTE)
 
                 page.go("/menu")
                 return
@@ -383,7 +395,7 @@ def LoginView(page: ft.Page):
             if es_error_de_red(ex):
                 mostrar_sin_conexion()
             else:
-                mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
+                mostrar_mensaje(f"Error al conectar con la base de datos: {detalle_seguro(ex)}")
 
         finally:
             try:
@@ -541,7 +553,7 @@ def LoginView(page: ft.Page):
             if es_error_de_red(ex):
                 mostrar_sin_conexion()
             else:
-                mostrar_mensaje(f"Error al conectar con la base de datos: {ex}")
+                mostrar_mensaje(f"Error al conectar con la base de datos: {detalle_seguro(ex)}")
             return
 
         marcar_cargando(False)
@@ -618,7 +630,7 @@ def LoginView(page: ft.Page):
                 page.update()
                 return
             except Exception as error:
-                lbl_dlg.value = f"No se pudo registrar la solicitud: {error}"
+                lbl_dlg.value = f"No se pudo registrar la solicitud: {detalle_seguro(error)}"
                 page.update()
                 return
 

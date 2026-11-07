@@ -1,6 +1,7 @@
 """Router central del sistema Corallie Bubble."""
 
 import flet as ft
+from servicios import servicio_sesion as sesion
 from vistas.vista_login import LoginView
 
 
@@ -22,17 +23,14 @@ class Router:
     # Utilidades de sesión
     # ------------------------------------------------------------
     def _store_get(self, key, default=None):
+        # Solo memoria del servidor. El almacenamiento del navegador ya no
+        # se consulta: el usuario puede editarlo (por ejemplo, cambiar su
+        # cliente_id por el de otra persona) y en una caja compartida ahi
+        # quedan los datos de quien la uso antes.
         try:
             store = getattr(self.page, "_mem_store", None)
             if isinstance(store, dict) and key in store:
                 return store.get(key, default)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self.page, "client_storage"):
-                value = self.page.client_storage.get(key)
-                return default if value is None else value
         except Exception:
             pass
 
@@ -74,10 +72,12 @@ class Router:
                         selectable=True,
                     ),
                     ft.ElevatedButton(
-                        "Volver al punto de venta",
+                        "Volver al inicio",
                         bgcolor="#C86DD7",
                         color="white",
-                        on_click=lambda e: self.page.go("/pos"),
+                        on_click=lambda e: self.page.go(
+                            sesion.ruta_inicio(sesion.rol_actual(self.page))
+                        ),
                     ),
                     ft.TextButton(
                         "Ir al login",
@@ -98,8 +98,26 @@ class Router:
     # ------------------------------------------------------------
     # Cambio de rutas
     # ------------------------------------------------------------
+    def _autorizar(self, ruta: str) -> str:
+        """Devuelve la ruta que realmente se puede abrir.
+
+        Sin sesion -> login. Con sesion pero de otro rol -> la pantalla
+        de inicio de su propio rol. Ruta desconocida -> se deja pasar
+        para mostrar "Ruta no registrada" (no abre nada).
+        """
+        if ruta in sesion.RUTAS_PUBLICAS or ruta not in sesion.PERMISOS:
+            return ruta
+        rol = sesion.rol_actual(self.page)
+        if sesion.puede_acceder(rol, ruta):
+            return ruta
+        return sesion.ruta_inicio(rol)
+
     def route_change(self, route):
-        ruta = self.page.route
+        ruta = self._autorizar(self.page.route)
+        if ruta != self.page.route:
+            # Corrige la barra de direcciones para que no muestre una
+            # ruta que no se abrio.
+            self.page.route = ruta
         nueva_vista = None
 
         try:
@@ -207,7 +225,12 @@ class Router:
                 nueva_vista = self.error_view(f"Ruta no registrada: {ruta}")
 
         except Exception as ex:
-            nueva_vista = self.error_view(str(ex))
+            # El detalle tecnico va a la consola del servidor, no a la
+            # pantalla: puede revelar tablas, columnas o rutas internas.
+            print(f"[router] Error al abrir {ruta}: {type(ex).__name__}: {ex}")
+            nueva_vista = self.error_view(
+                "No se pudo abrir esta pantalla. Intenta de nuevo o vuelve al inicio."
+            )
 
         self.page.views.clear()
         self.page.views.append(nueva_vista)

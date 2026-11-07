@@ -36,6 +36,19 @@ from servicios import servicio_seguridad as seguridad
 # La columna lleva ñ: se referencia siempre entre acentos graves.
 _COL_PASS = "`Contraseña`"
 
+# Hash de relleno para usuarios inexistentes. Se calcula una sola vez:
+# si se generara en cada intento, un usuario inexistente costaria dos
+# hashes (generar + verificar) y uno real solo uno, y esa diferencia de
+# tiempo delataria que nombres de usuario existen.
+_HASH_RELLENO: str | None = None
+
+
+def _hash_relleno() -> str:
+    global _HASH_RELLENO
+    if _HASH_RELLENO is None:
+        _HASH_RELLENO = seguridad.hashear("valor_inexistente")
+    return _HASH_RELLENO
+
 
 # ------------------------------------------------------------
 # Resultados
@@ -272,9 +285,10 @@ def autenticar(nombre_usuario: str, contrasena: str, origen: str = "app") -> Res
         )
 
     if not fila:
-        # Se calcula un hash falso para que el tiempo de respuesta sea
-        # similar al de un usuario existente (evita enumerar usuarios).
-        seguridad.verificar(contrasena, seguridad.hashear("valor_inexistente"))
+        # Se verifica contra un hash de relleno para que el tiempo de
+        # respuesta sea igual al de un usuario existente (evita enumerar
+        # usuarios). El relleno se genera una sola vez por proceso.
+        seguridad.verificar(contrasena, _hash_relleno())
         _registrar_intento(nombre_usuario, False, "usuario_inexistente", origen)
         _, _, restantes = estado_bloqueo(nombre_usuario)
         return ResultadoLogin(

@@ -184,6 +184,23 @@ class PruebasLoginRechazos(_BaseLogin):
         self.assertEqual(inexistente.motivo, incorrecta.motivo)
         self.assertEqual(self.motivos_registrados()[0], "usuario_inexistente")
 
+    def test_usuario_inexistente_cuesta_lo_mismo_que_uno_real(self):
+        """Un usuario inexistente no debe tardar mas (enumeracion por tiempo).
+
+        Antes se generaba un hash nuevo en cada intento ademas de
+        verificarlo: dos hashes contra uno de un usuario real.
+        """
+        self.buscar.return_value = None
+        auth.autenticar("nadie", _PASS)  # genera el relleno la primera vez
+
+        with patch.object(auth.seguridad, "hashear", wraps=seguridad.hashear) as hashear, \
+             patch.object(auth.seguridad, "verificar", wraps=seguridad.verificar) as verificar:
+            auth.autenticar("nadie", _PASS)
+            auth.autenticar("otro", _PASS)
+
+        hashear.assert_not_called()
+        self.assertEqual(verificar.call_count, 2)
+
     def test_cuenta_inactiva(self):
         self.activo.return_value = False
 

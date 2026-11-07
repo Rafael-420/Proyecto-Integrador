@@ -144,9 +144,12 @@ COLOR_FONDO = "#F9F6FB"
 # servicios/servicio_autenticacion.py
 # ------------------------------------------------------------
 # Iteraciones de PBKDF2-SHA256. Mas alto = mas costoso de romper por
-# fuerza bruta, pero tambien mas lento al iniciar sesion. 120 000 es
-# un punto razonable tanto en escritorio como en el APK.
-SEG_ITERACIONES = _leer_int("SEG_ITERACIONES", 120_000)
+# fuerza bruta, pero tambien mas lento al iniciar sesion. 600 000 es el
+# minimo que recomienda OWASP (Password Storage Cheat Sheet). El hash se
+# calcula en el servidor (la app corre como WEB_BROWSER), no en el
+# celular: cuesta unos 140 ms por inicio de sesion. Los hashes con menos
+# iteraciones se actualizan solos en el siguiente inicio de sesion.
+SEG_ITERACIONES = _leer_int("SEG_ITERACIONES", 600_000)
 
 SEG_LONGITUD_MINIMA = _leer_int("SEG_LONGITUD_MINIMA", 8)
 SEG_EXIGIR_LETRA = _leer_bool("SEG_EXIGIR_LETRA", True)
