@@ -12,7 +12,12 @@ import flet as ft
 
 from componentes.appbar_admin import build_admin_appbar
 from utilidades.flet_compat import set_error
-from utilidades.subida_archivos import borrar_subida, crear_selector, elegir_y_subir
+from utilidades.subida_archivos import (
+    SeleccionReemplazada,
+    borrar_subida,
+    crear_selector,
+    elegir_y_subir,
+)
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from servicios.servicio_bebidas import (
     listar_bebidas_admin,
@@ -21,9 +26,12 @@ from servicios.servicio_bebidas import (
     editar_bebida,
     eliminar_bebida,
     marcar_disponibilidad,
-    guardar_archivo_imagen_bebida,
-    guardar_imagen_bebida,
 )
+from servicios.servicio_imagenes_bebidas import (
+    guardar_imagen_desde_archivo,
+    imagenes_de_bebidas,
+)
+from utilidades.imagenes import foto_bebida
 
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
@@ -137,6 +145,12 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
         grid_bebidas.controls.clear()
         bebidas = listar_bebidas_admin()
 
+        # Las fotos vienen de la base de datos en la nube (una sola
+        # consulta para todas, y solo se descargan si cambiaron).
+        fotos = imagenes_de_bebidas([b.get("IdBebida") for b in bebidas]) if bebidas else {}
+        for b in bebidas:
+            b["imagen_datos"] = fotos.get(b.get("IdBebida"))
+
         if not bebidas:
             grid_bebidas.controls.append(
                 ft.Container(
@@ -155,7 +169,7 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
 
     def _tarjeta_bebida(b: dict):
         disponible = bool(b.get("Disponible"))
-        imagen = (b.get("Imagen") or "").strip()
+        foto = {"imagen_datos": b.get("imagen_datos"), "imagen": b.get("Imagen")}
 
         miniatura = ft.Container(
             width=56,
@@ -164,9 +178,9 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
             bgcolor="#FFE7F5",
             alignment=ft.Alignment(0, 0),
             clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
-            content=(
-                ft.Image(src=imagen, width=56, height=56, fit=ft.BoxFit.COVER, error_content=ft.Text("🧋", size=26))
-                if imagen else ft.Text("🧋", size=26)
+            content=foto_bebida(
+                foto, lambda: ft.Text("🧋", size=26),
+                width=56, height=56, fit=ft.BoxFit.COVER,
             ),
         )
 
@@ -277,7 +291,8 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
         precio_f.on_change = _filtrar_numero(precio_f)
 
         imagen_elegida = {"path": None}
-        imagen_actual = (datos.get("Imagen") or "").strip() or None
+        foto_actual = {"imagen_datos": datos.get("imagen_datos"), "imagen": datos.get("Imagen")}
+        imagen_actual = bool(datos.get("imagen_datos") or (datos.get("Imagen") or "").strip())
 
         icono_imagen = ft.Icon(
             _icon("CHECK_CIRCLE") if imagen_actual else _icon("IMAGE", "PHOTO"),
@@ -288,21 +303,55 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
             size=12, color="#16A34A" if imagen_actual else "#7A7A7A",
         )
         preview_imagen = (
-            ft.Image(src=imagen_actual, width=48, height=48, fit=ft.BoxFit.COVER, border_radius=14)
+            foto_bebida(
+                foto_actual,
+                lambda: ft.Container(width=48, height=48, border_radius=14, bgcolor="#F5E8FF", alignment=ft.Alignment(0, 0), content=ft.Icon(_icon("IMAGE", "PHOTO"), color="#C06CD8", size=26)),
+                width=48, height=48, fit=ft.BoxFit.COVER, border_radius=14,
+            )
             if imagen_actual else
             ft.Container(width=48, height=48, border_radius=14, bgcolor="#F5E8FF", alignment=ft.Alignment(0, 0), content=icono_imagen)
         )
+
+        def _mostrar_estado(texto: str, color: str):
+            txt_imagen.value = texto
+            txt_imagen.color = color
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        def avance_foto(estado: str, progreso=None):
+            # Antes el texto decía "Subiendo foto..." desde que se tocaba
+            # el botón, aunque la galería ni siquiera se hubiera abierto,
+            # y si el navegador del celular la bloqueaba se quedaba así
+            # para siempre.
+            if estado == "abriendo":
+                _mostrar_estado("Abriendo galería...", "#7A7A7A")
+            elif estado == "sin_respuesta":
+                _mostrar_estado(
+                    "¿No se abrió la galería? Toca «Subir foto» otra vez.",
+                    "#B45309",
+                )
+            elif estado == "subiendo":
+                if progreso is None:
+                    _mostrar_estado("Subiendo foto...", "#7A7A7A")
+                else:
+                    porcentaje = max(0, min(100, int(round(float(progreso) * 100))))
+                    _mostrar_estado(f"Subiendo foto... {porcentaje} %", "#7A7A7A")
 
         async def elegir_imagen(ev=None):
             # Antes se creaba un FilePicker y se agregaba a page.overlay.
             # En Flet 0.80 eso dibuja "Unknown control: FilePicker", y en
             # el navegador el archivo no trae ruta, así que la foto nunca
             # se guardaba. elegir_y_subir() resuelve las dos cosas.
-            txt_imagen.value = "Subiendo foto..."
-            txt_imagen.color = "#7A7A7A"
-            page.update()
             try:
-                ruta = await elegir_y_subir(page, selector_imagen, ["png", "jpg", "jpeg", "webp"])
+                ruta = await elegir_y_subir(
+                    page, selector_imagen, ["png", "jpg", "jpeg", "webp"], avance_foto
+                )
+            except SeleccionReemplazada:
+                # El admin volvió a tocar "Subir foto": la nueva espera
+                # ya es la que manda el texto.
+                return
             except Exception as ex:
                 txt_imagen.value = "No se pudo subir la foto"
                 txt_imagen.color = "#EF4444"
@@ -335,6 +384,9 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
                         txt_imagen,
                     ],
                     spacing=2,
+                    # expand: los avisos largos pasan a otra línea en
+                    # lugar de salirse del diálogo en pantallas angostas.
+                    expand=True,
                 ),
             ],
             spacing=12,
@@ -385,21 +437,24 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
                 else:
                     id_bebida = crear_bebida(nombre_v, precio_v, desc_v, cat_f.value)
 
-                foto_fallo = False
+                # La foto se guarda en la base de datos en la nube (tabla
+                # bebidas_imagenes), no en assets/bebidas: así se ve en
+                # cualquier dispositivo y en el APK.
+                foto_fallo = None
                 if imagen_elegida["path"]:
-                    ruta_rel = guardar_archivo_imagen_bebida(imagen_elegida["path"], nombre_v)
-                    borrar_subida(imagen_elegida["path"])
-                    imagen_elegida["path"] = None
-                    if ruta_rel:
-                        guardar_imagen_bebida(id_bebida, ruta_rel)
-                    else:
-                        foto_fallo = True
+                    try:
+                        guardar_imagen_desde_archivo(id_bebida, imagen_elegida["path"])
+                    except Exception as ex_foto:
+                        foto_fallo = str(ex_foto) or "error desconocido"
+                    finally:
+                        borrar_subida(imagen_elegida["path"])
+                        imagen_elegida["path"] = None
 
                 _close_dialog(page, dlg)
                 recargar()
                 mensaje = "Bebida actualizada correctamente" if modo_edicion else "Bebida creada correctamente"
                 if foto_fallo:
-                    _show_snack(page, f"{mensaje}, pero no se pudo guardar la foto.", ok=False)
+                    _show_snack(page, f"{mensaje}, pero no se pudo guardar la foto: {foto_fallo}", ok=False)
                 else:
                     _show_snack(page, mensaje)
             except Exception as ex:

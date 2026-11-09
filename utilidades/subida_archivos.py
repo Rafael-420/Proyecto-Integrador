@@ -13,13 +13,34 @@ Por qué existe:
      Hay que subirlo primero con FilePicker.upload() a la carpeta de
      subidas (upload_dir en main.py) y ahí sí se puede copiar.
 
+  3. En el navegador del celular la galería a veces no se abre: el
+     navegador solo permite abrirla justo después de un toque, y la
+     orden de Flet llega desde el servidor un instante después. Cuando
+     el navegador la bloquea no avisa nada, y pick_files() se quedaba
+     esperando para siempre ("Subiendo foto..." congelado). Ahora:
+       - se avisa a la vista en qué paso va (al_avanzar), para que el
+         texto diga "Abriendo galería..." y no "Subiendo foto...";
+       - si en SEGUNDOS_ESPERA_GALERIA no hay respuesta, se avisa a la
+         vista para que sugiera volver a tocar el botón;
+       - si el usuario vuelve a tocar el botón, la espera anterior se
+         cancela (lanza SeleccionReemplazada) y empieza una nueva.
+     En el APK la galería es nativa y no tiene esta restricción.
+
 Uso:
 
     selector = crear_selector(page)          # una vez, al armar la vista
     ...
     async def elegir(e):
-        ruta = await elegir_y_subir(page, selector, ["png", "jpg"])
+        try:
+            ruta = await elegir_y_subir(page, selector, ["png", "jpg"], al_avanzar)
+        except SeleccionReemplazada:
+            return                            # el usuario volvió a tocar
         if ruta: ...                          # ruta local en el servidor
+
+    al_avanzar(estado, progreso) recibe:
+        "abriendo"       se pidió abrir la galería
+        "sin_respuesta"  pasaron SEGUNDOS_ESPERA_GALERIA sin respuesta
+        "subiendo"       con progreso de 0.0 a 1.0 (o None)
 """
 
 from __future__ import annotations
@@ -29,12 +50,27 @@ import os
 import re
 import secrets
 from pathlib import Path
+from typing import Callable, Optional
 
 import flet as ft
 
 from configuracion.variables import CARPETA_SUBIDAS
 
 SEGUNDOS_MAXIMOS_SUBIDA = 120
+
+# Tiempo sin respuesta de la galería antes de sugerir volver a tocar.
+# No se cancela nada al cumplirse: el usuario puede seguir eligiendo.
+SEGUNDOS_ESPERA_GALERIA = 10
+
+# Una galería abierta de verdad nunca tarda tanto; pasado esto la
+# espera se da por perdida (antes el límite era el de Flet: 1 hora).
+SEGUNDOS_MAXIMOS_GALERIA = 600
+
+AlAvanzar = Callable[[str, Optional[float]], None]
+
+
+class SeleccionReemplazada(Exception):
+    """El usuario volvió a tocar el botón: esta selección ya no cuenta."""
 
 
 def _es_servicio(control) -> bool:
@@ -63,11 +99,66 @@ def _tipo_personalizado():
     return getattr(tipos, "CUSTOM", None) if tipos else None
 
 
-async def elegir_y_subir(page: ft.Page, selector: ft.FilePicker, extensiones: list[str]) -> str | None:
+def _avisar(al_avanzar: Optional[AlAvanzar], estado: str, progreso: Optional[float] = None) -> None:
+    """Llama a la vista sin que un error de la interfaz rompa la subida."""
+    if al_avanzar is None:
+        return
+    try:
+        al_avanzar(estado, progreso)
+    except Exception:
+        pass
+
+
+async def _esperar_galeria(
+    selector: ft.FilePicker,
+    opciones: dict,
+    al_avanzar: Optional[AlAvanzar],
+):
+    """Abre la galería y espera la respuesta sin congelar la pantalla.
+
+    Si el usuario vuelve a tocar el botón mientras se espera, la espera
+    anterior se cancela y esta función lanza SeleccionReemplazada.
+    """
+    anterior = getattr(selector, "_corallie_espera", None)
+    if anterior is not None and not anterior.done():
+        anterior.cancel()
+
+    tarea = asyncio.ensure_future(selector.pick_files(**opciones))
+    try:
+        selector._corallie_espera = tarea
+    except Exception:
+        pass
+
+    _avisar(al_avanzar, "abriendo")
+    try:
+        hecho, _ = await asyncio.wait({tarea}, timeout=SEGUNDOS_ESPERA_GALERIA)
+        if not hecho:
+            _avisar(al_avanzar, "sin_respuesta")
+            restante = SEGUNDOS_MAXIMOS_GALERIA - SEGUNDOS_ESPERA_GALERIA
+            hecho, _ = await asyncio.wait({tarea}, timeout=restante)
+            if not hecho:
+                tarea.cancel()
+                raise RuntimeError("La galería no respondió. Vuelve a tocar el botón.")
+    except asyncio.CancelledError:
+        tarea.cancel()
+        raise
+
+    if tarea.cancelled():
+        raise SeleccionReemplazada()
+    return tarea.result()
+
+
+async def elegir_y_subir(
+    page: ft.Page,
+    selector: ft.FilePicker,
+    extensiones: list[str],
+    al_avanzar: Optional[AlAvanzar] = None,
+) -> str | None:
     """Abre el explorador de archivos y devuelve la ruta del archivo en el servidor.
 
-    Devuelve None si el usuario cancela. Lanza una excepción con un
-    mensaje claro si la subida falla.
+    Devuelve None si el usuario cancela. Lanza SeleccionReemplazada si
+    el usuario volvió a tocar el botón mientras se esperaba la galería,
+    y una excepción con un mensaje claro si la subida falla.
     """
     opciones = {"allow_multiple": False, "allowed_extensions": extensiones}
     tipo = _tipo_personalizado()
@@ -75,7 +166,7 @@ async def elegir_y_subir(page: ft.Page, selector: ft.FilePicker, extensiones: li
         # Sin file_type=CUSTOM, Flet ignora allowed_extensions.
         opciones["file_type"] = tipo
 
-    archivos = await selector.pick_files(**opciones)
+    archivos = await _esperar_galeria(selector, opciones, al_avanzar)
     if not archivos:
         return None
     archivo = archivos[0]
@@ -98,6 +189,8 @@ async def elegir_y_subir(page: ft.Page, selector: ft.FilePicker, extensiones: li
             f"inicie la app con upload_dir y FLET_SECRET_KEY. ({ex})"
         ) from None
 
+    _avisar(al_avanzar, "subiendo", 0.0)
+
     terminado = asyncio.Event()
     resultado = {"error": None}
 
@@ -105,7 +198,10 @@ async def elegir_y_subir(page: ft.Page, selector: ft.FilePicker, extensiones: li
         if getattr(e, "error", None):
             resultado["error"] = e.error
             terminado.set()
-        elif (getattr(e, "progress", None) or 0) >= 1.0:
+            return
+        progreso = getattr(e, "progress", None)
+        _avisar(al_avanzar, "subiendo", progreso)
+        if (progreso or 0) >= 1.0:
             terminado.set()
 
     selector.on_upload = al_subir

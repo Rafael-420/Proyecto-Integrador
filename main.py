@@ -6,11 +6,36 @@ from navegacion.router import Router
 from configuracion.variables import CARPETA_SUBIDAS, COLOR_FONDO
 
 
+# Nombre que usan las vistas en font_family -> archivo dentro de assets.
+# Se registran todas las fuentes de assets/fonts para que cualquier vista
+# las pueda usar con font_family="<nombre>".
+#
+# Fredoka-Regular.ttf es una version fija (peso 400) de la fuente
+# variable Fredoka-VariableFont_wdth,wght.ttf. La variable tiene como peso
+# por defecto Light (300) y Flet no permite elegirlo, asi que todo el
+# texto normal salia muy delgado. La version fija pesa 49 KB en lugar de
+# 157 KB y la negrita (weight=BOLD) se sigue viendo bien.
+FUENTES_PROYECTO = {
+    "Fredoka": "fonts/Fredoka-Regular.ttf",
+    "FredokaVariable": "fonts/Fredoka-VariableFont_wdth,wght.ttf",
+    "FredokaCondensedLight": "fonts/Fredoka_Condensed-Light.ttf",
+    "FredokaCondensedMedium": "fonts/Fredoka_Condensed-Medium.ttf",
+    "PliantBlack": "fonts/Pliant_Expanded-Black.ttf",
+    "PliantBold": "fonts/Pliant_Expanded-Bold.ttf",
+}
+
+
 def main(page: ft.Page):
     page.title = "Corallie Bubble - Punto de Venta"
     page.theme_mode = ft.ThemeMode.LIGHT
     page.bgcolor = COLOR_FONDO
     page.padding = 0
+
+    # Fuentes del proyecto (assets/fonts). Flutter no usa las fuentes
+    # instaladas en el sistema, así que cualquier font_family que no se
+    # registre aquí se ve con la fuente por defecto (Roboto), en la PC,
+    # en el navegador del celular y en el APK.
+    page.fonts = FUENTES_PROYECTO
 
     def view_pop(view):
         if len(page.views) > 1:

@@ -1,5 +1,6 @@
 import flet as ft
 import re
+from pathlib import Path
 
 # Compatibilidad íconos (Flet nuevo)
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -10,7 +11,86 @@ from configuracion.variables import ROL_CLIENTE, ROL_EMPLEADO
 from servicios import servicio_privacidad as privacidad
 from servicios import servicio_seguridad as seguridad
 from componentes.dialogo_aviso_privacidad import mostrar_aviso_privacidad
-from utilidades.flet_compat import set_error, set_texto_boton, snack
+from utilidades.flet_compat import set_error, snack
+
+
+# -------------------------------------------------------------------
+# APARIENCIA (misma línea visual que el login)
+# -------------------------------------------------------------------
+# Paleta y fuentes copiadas de vistas/vista_login.py. No se importan de
+# ahí porque vista_login importa esta vista y se haría un ciclo.
+COLOR_FONDO = "#F7F1F8"
+COLOR_CARD = "#FBF8FD"
+COLOR_MORADO = "#A45CE0"
+COLOR_MORADO_CLARO = "#C88CF4"
+COLOR_ROSA = "#F65FAE"
+COLOR_TEXTO = "#5E5575"
+COLOR_PLACEHOLDER = "#958BA8"
+COLOR_INPUT_BG = "#FCFAFE"
+COLOR_INPUT_BORDER = "#B879F0"
+COLOR_ICON_BG = "#EFE6F8"
+COLOR_DECOR = "#D3A7F1"
+COLOR_ERROR = "#D32F2F"
+COLOR_GRIS = "#6B7280"
+
+FUENTE = "Fredoka"            # registradas en main.py (page.fonts)
+FUENTE_TITULO = "PliantBlack"
+
+ALIGN_CENTER = (
+    getattr(getattr(ft, "alignment", None), "center", None)
+    or getattr(getattr(ft, "Alignment", None), "CENTER", None)
+)
+
+
+def _icon(*names):
+    """Obtiene íconos compatibles entre versiones de Flet."""
+    for name in names:
+        for modulo in (getattr(ft, "icons", None), getattr(ft, "Icons", None)):
+            value = getattr(modulo, name, None) if modulo is not None else None
+            if value is not None:
+                return value
+    return None
+
+
+ICON_PERSONA = _icon("PERSON_OUTLINE", "PERSON")
+ICON_CORREO = _icon("MAIL_OUTLINE", "EMAIL")
+ICON_TELEFONO = _icon("PHONE_OUTLINED", "PHONE")
+ICON_USUARIO = _icon("ACCOUNT_CIRCLE_OUTLINED", "ACCOUNT_CIRCLE")
+ICON_CANDADO = _icon("LOCK_OUTLINE", "LOCK")
+ICON_REGISTRAR = _icon("PERSON_ADD_ALT_1", "PERSON_ADD")
+ICON_VOLVER = _icon("ARROW_BACK", "CHEVRON_LEFT")
+
+
+def _img(nombre_limpio: str, nombre_original: str | None = None) -> str:
+    """Imagen decorativa de assets/login (mismos archivos que el login)."""
+    base = Path(__file__).parent.parent / "assets" / "login"
+    for nombre in (nombre_limpio, nombre_original):
+        if nombre and (base / nombre).exists():
+            return f"login/{nombre}"
+    return f"login/{nombre_limpio}"
+
+
+def _campo(label: str, icono, **opciones) -> ft.TextField:
+    """Campo con el estilo de píldora del login, pero con etiqueta y
+    mensaje de error debajo (el login no los necesita, el registro sí)."""
+    return ft.TextField(
+        label=label,
+        prefix_icon=ft.Icon(icono, color=COLOR_MORADO, size=22) if icono is not None else None,
+        border_radius=28,
+        border_color=COLOR_INPUT_BORDER,
+        focused_border_color=COLOR_MORADO,
+        border_width=1.6,
+        focused_border_width=2.2,
+        filled=True,
+        fill_color=COLOR_INPUT_BG,
+        cursor_color=COLOR_MORADO,
+        text_style=ft.TextStyle(font_family=FUENTE, size=16, color=COLOR_TEXTO),
+        label_style=ft.TextStyle(font_family=FUENTE, size=15, color=COLOR_PLACEHOLDER),
+        hint_style=ft.TextStyle(font_family=FUENTE, size=15, color=COLOR_PLACEHOLDER),
+        error_style=ft.TextStyle(font_family=FUENTE, size=12, color=COLOR_ERROR),
+        counter_style=ft.TextStyle(font_family=FUENTE, size=11, color=COLOR_PLACEHOLDER),
+        **opciones,
+    )
 
 # -------------------------------------------------------------------
 # HELPERS DE BD  (verificación cruzada empleado + cliente)
@@ -86,13 +166,14 @@ def RegistroView(page: ft.Page, tipo: str):
 
     titulo = f"Registro de {tipo}"
 
-    txt_nombre   = ft.TextField(label="Nombre",              autofocus=True, max_length=30)
-    txt_apellido = ft.TextField(label="Apellido",                            max_length=30)
-    txt_correo   = ft.TextField(label="Correo electrónico",  hint_text="ejemplo@gmail.com", max_length=60)
-    txt_tel      = ft.TextField(label="Teléfono",            max_length=10, keyboard_type=ft.KeyboardType.NUMBER)
-    txt_usuario  = ft.TextField(label="Nombre de usuario",   max_length=20)
-    txt_pass     = ft.TextField(label="Contraseña",          password=True, can_reveal_password=True)
-    txt_pass2    = ft.TextField(label="Confirmar contraseña",password=True, can_reveal_password=True)
+    txt_nombre   = _campo("Nombre",               ICON_PERSONA,  autofocus=True, max_length=30)
+    txt_apellido = _campo("Apellido",             ICON_PERSONA,  max_length=30)
+    txt_correo   = _campo("Correo electrónico",   ICON_CORREO,   hint_text="ejemplo@gmail.com", max_length=60,
+                          keyboard_type=ft.KeyboardType.EMAIL)
+    txt_tel      = _campo("Teléfono",             ICON_TELEFONO, max_length=10, keyboard_type=ft.KeyboardType.NUMBER)
+    txt_usuario  = _campo("Nombre de usuario",    ICON_USUARIO,  max_length=20)
+    txt_pass     = _campo("Contraseña",           ICON_CANDADO,  password=True, can_reveal_password=True)
+    txt_pass2    = _campo("Confirmar contraseña", ICON_CANDADO,  password=True, can_reveal_password=True)
 
     # Los mensajes de error (sobre todo el de la contraseña) son largos;
     # sin esto se cortaban con "..." en el celular.
@@ -101,14 +182,14 @@ def RegistroView(page: ft.Page, tipo: str):
 
     # Mensaje general junto al botón. En el celular los campos con error
     # pueden quedar fuera de la pantalla; este aviso sí se ve.
-    lbl_msg = ft.Text("", size=13, text_align=ft.TextAlign.CENTER)
+    lbl_msg = ft.Text("", size=13, text_align=ft.TextAlign.CENTER, font_family=FUENTE)
 
     # ------------------------------------------------------------------
     # AVISO DE PRIVACIDAD (LFPDPPP)
     # La casilla es obligatoria: sin consentimiento no se crea la cuenta.
     # ------------------------------------------------------------------
-    chk_privacidad = ft.Checkbox(value=False, active_color="#C86DD7")
-    lbl_error_privacidad = ft.Text("", size=12, color="red", visible=False)
+    chk_privacidad = ft.Checkbox(value=False, active_color=COLOR_MORADO)
+    lbl_error_privacidad = ft.Text("", size=12, color=COLOR_ERROR, visible=False, font_family=FUENTE)
 
     def alternar_privacidad(e):
         chk_privacidad.value = not chk_privacidad.value
@@ -121,34 +202,88 @@ def RegistroView(page: ft.Page, tipo: str):
 
     chk_privacidad.on_change = limpiar_error_privacidad
 
-    bloque_privacidad = ft.Column(
-        [
-            ft.Text(privacidad.texto_simplificado(), size=12, color="#6B7280"),
-            ft.Row(
-                [
-                    chk_privacidad,
-                    ft.Container(
-                        content=ft.Text("He leído y acepto el aviso de privacidad", size=13),
-                        expand=True,
-                        on_click=alternar_privacidad,
+    bloque_privacidad = ft.Container(
+        bgcolor=COLOR_ICON_BG,
+        border_radius=22,
+        padding=ft.padding.only(left=16, right=16, top=14, bottom=10),
+        content=ft.Column(
+            [
+                ft.Text(
+                    privacidad.texto_simplificado(),
+                    size=12,
+                    color=COLOR_TEXTO,
+                    font_family=FUENTE,
+                ),
+                ft.Row(
+                    [
+                        chk_privacidad,
+                        ft.Container(
+                            content=ft.Text(
+                                "He leído y acepto el aviso de privacidad",
+                                size=14,
+                                color=COLOR_TEXTO,
+                                font_family=FUENTE,
+                            ),
+                            expand=True,
+                            on_click=alternar_privacidad,
+                        ),
+                    ],
+                    spacing=4,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                ),
+                ft.Container(
+                    padding=ft.padding.only(left=6, bottom=4),
+                    on_click=lambda e: mostrar_aviso_privacidad(page),
+                    content=ft.Text(
+                        "Leer el aviso de privacidad completo",
+                        size=13,
+                        color=COLOR_MORADO,
+                        weight=ft.FontWeight.BOLD,
+                        font_family=FUENTE,
                     ),
-                ],
-                spacing=4,
-                vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            ),
-            ft.TextButton(
-                "Leer el aviso de privacidad completo",
-                on_click=lambda e: mostrar_aviso_privacidad(page),
-            ),
-            lbl_error_privacidad,
-        ],
-        spacing=2,
+                ),
+                lbl_error_privacidad,
+            ],
+            spacing=4,
+        ),
     )
 
-    btn_registrar = ft.ElevatedButton(
-        "Registrarme",
-        bgcolor="#C86DD7",
-        color="white",
+    # Botón con la misma forma que "Iniciar sesión" del login.
+    contenido_boton = ft.Row(
+        [
+            ft.Icon(ICON_REGISTRAR, color="white", size=24)
+            if ICON_REGISTRAR is not None
+            else ft.Container(),
+            ft.Text("Registrarme", color="white", size=20,
+                    weight=ft.FontWeight.BOLD, font_family=FUENTE),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=12,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    contenido_boton_cargando = ft.Row(
+        [
+            ft.ProgressRing(width=22, height=22, stroke_width=3, color="white"),
+            ft.Text("Registrando...", color="white", size=18,
+                    weight=ft.FontWeight.BOLD, font_family=FUENTE),
+        ],
+        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=14,
+        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+    )
+    btn_registrar = ft.Container(
+        height=60,
+        border_radius=30,
+        bgcolor=COLOR_MORADO,
+        shadow=ft.BoxShadow(
+            blur_radius=14,
+            spread_radius=1,
+            color="#338E45CC",
+            offset=ft.Offset(0, 6),
+        ),
+        ink=True,
+        alignment=ALIGN_CENTER,
+        content=contenido_boton,
     )
 
     # Bandera anti doble envío: con la base de datos en la nube el
@@ -156,7 +291,7 @@ def RegistroView(page: ft.Page, tipo: str):
     # de la contraseña y dos INSERT).
     en_proceso = {"value": False}
 
-    def mostrar_mensaje(texto: str, color: str = "red"):
+    def mostrar_mensaje(texto: str, color: str = COLOR_ERROR):
         lbl_msg.value = texto
         lbl_msg.color = color
 
@@ -286,7 +421,8 @@ def RegistroView(page: ft.Page, tipo: str):
     # ------------------------------------------------------------------
     def bloquear_boton(bloquear: bool):
         btn_registrar.disabled = bloquear
-        set_texto_boton(btn_registrar, "Registrando..." if bloquear else "Registrarme")
+        btn_registrar.content = contenido_boton_cargando if bloquear else contenido_boton
+        btn_registrar.bgcolor = COLOR_MORADO_CLARO if bloquear else COLOR_MORADO
 
     def registrar(e):
         # Primera línea de defensa contra el doble toque.
@@ -294,7 +430,7 @@ def RegistroView(page: ft.Page, tipo: str):
             return
         en_proceso["value"] = True
         bloquear_boton(True)
-        mostrar_mensaje("Revisando tus datos...", "#6B7280")
+        mostrar_mensaje("Revisando tus datos...", COLOR_GRIS)
         page.update()
 
         try:
@@ -385,44 +521,175 @@ def RegistroView(page: ft.Page, tipo: str):
         ir_login()
 
     # ------------------------------------------------------------------
-    # LAYOUT
+    # LAYOUT  (misma línea visual que el login: fondo decorado, tarjeta
+    # redondeada, campos tipo píldora y botón morado)
     # ------------------------------------------------------------------
-    # --------------------------------------------------------
-    # Responsive: ancho fijo de 400px + sin scroll no funcionaba en
-    # celular (con 7 campos + botones, el contenido no cabía en la
-    # pantalla y no había forma de bajar para llegar al botón).
-    # --------------------------------------------------------
+    # Responsive: en celular la tarjeta usa el ancho de la pantalla y los
+    # campos van uno debajo de otro; en computadora nombre/apellido y las
+    # dos contraseñas van lado a lado. Toda la página tiene scroll para
+    # poder llegar al botón en pantallas bajas.
     ancho_pagina = getattr(page, "width", None) or 1200
-    ancho_form = min(400, ancho_pagina - 32)
+    es_movil = ancho_pagina < 700
+    ancho_card = min(640, ancho_pagina - 24)
+    padding_card = 20 if es_movil else 38
 
-    contenido = ft.Container(
-        expand=True,
-        bgcolor="#F9F6FB",
-        alignment=ft.Alignment.CENTER,
-        padding=ft.padding.symmetric(horizontal=12, vertical=16),
+    def par(campo_a, campo_b):
+        if es_movil:
+            return ft.Column(
+                [campo_a, campo_b],
+                spacing=12,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            )
+        campo_a.expand = True
+        campo_b.expand = True
+        return ft.Row(
+            [campo_a, campo_b],
+            spacing=12,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+        )
+
+    def seccion(texto):
+        return ft.Container(
+            padding=ft.padding.only(left=6, top=4),
+            content=ft.Text(
+                texto,
+                size=15,
+                color=COLOR_MORADO,
+                weight=ft.FontWeight.BOLD,
+                font_family=FUENTE,
+            ),
+        )
+
+    link_volver = ft.Container(
+        ink=True,
+        border_radius=14,
+        padding=ft.padding.symmetric(horizontal=10, vertical=6),
+        on_click=volver_login,
+        content=ft.Row(
+            [
+                ft.Icon(ICON_VOLVER, color=COLOR_MORADO, size=22)
+                if ICON_VOLVER is not None
+                else ft.Container(),
+                ft.Text(
+                    "¿Ya tienes cuenta? Inicia sesión",
+                    color=COLOR_MORADO,
+                    size=16,
+                    weight=ft.FontWeight.BOLD,
+                    font_family=FUENTE,
+                ),
+            ],
+            spacing=10,
+            tight=True,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        ),
+    )
+
+    card_registro = ft.Container(
+        width=ancho_card,
+        border_radius=40 if es_movil else 48,
+        bgcolor=COLOR_CARD,
+        padding=ft.padding.only(
+            left=padding_card, right=padding_card, top=26, bottom=26
+        ),
+        shadow=ft.BoxShadow(
+            blur_radius=30,
+            spread_radius=2,
+            color="#22C86DD7",
+            offset=ft.Offset(0, 10),
+        ),
         content=ft.Column(
             [
-                ft.Text("Corallie Bubble", size=26, weight="bold", color="#C86DD7"),
-                ft.Text(titulo, size=20),
-                txt_nombre,
-                txt_apellido,
+                ft.Column(
+                    [
+                        ft.Image(src=_img("logo_corallie.png"), width=80 if es_movil else 100),
+                        ft.Text(
+                            "Corallie Bubble",
+                            size=30 if es_movil else 40,
+                            color=COLOR_MORADO,
+                            font_family=FUENTE_TITULO,
+                            text_align=ft.TextAlign.CENTER,
+                        ),
+                        ft.Row(
+                            [
+                                ft.Text("›", size=22, color=COLOR_DECOR, font_family=FUENTE),
+                                ft.Text(
+                                    titulo,
+                                    size=21,
+                                    color=COLOR_TEXTO,
+                                    font_family=FUENTE,
+                                    text_align=ft.TextAlign.CENTER,
+                                ),
+                                ft.Text("‹", size=22, color=COLOR_DECOR, font_family=FUENTE),
+                            ],
+                            alignment=ft.MainAxisAlignment.CENTER,
+                            spacing=12,
+                        ),
+                        ft.Text("♥", size=20, color=COLOR_ROSA, text_align=ft.TextAlign.CENTER),
+                    ],
+                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    spacing=6,
+                ),
+                seccion("Tus datos"),
+                par(txt_nombre, txt_apellido),
                 txt_correo,
                 txt_tel,
+                seccion("Tu cuenta"),
                 txt_usuario,
-                txt_pass,
-                txt_pass2,
+                par(txt_pass, txt_pass2),
                 bloque_privacidad,
                 lbl_msg,
                 btn_registrar,
-                ft.TextButton("Volver al login", on_click=volver_login),
+                ft.Row([link_volver], alignment=ft.MainAxisAlignment.CENTER),
             ],
-            spacing=15,
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            width=ancho_form,
-            scroll=ft.ScrollMode.AUTO,
+            spacing=12,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        ),
+    )
+
+    # Fondo decorativo: mismas imágenes del login (assets/login). En
+    # celular se omiten las que tapan el formulario.
+    decoracion = [
+        ft.Image(src=_img("mancha_rosa_2.png", "mancha rosa 2.png"), width=420, left=-80, top=-60),
+        ft.Image(src=_img("hoja_morada_2.png", "hoja morada 2.png"), width=220, right=-40, top=70),
+        ft.Image(src=_img("mancha_rosa_3.png", "mancha rosa 3.png"), width=420, right=-110, bottom=-90),
+    ]
+    if not es_movil:
+        decoracion += [
+            ft.Image(src=_img("burbujas.png"), width=76, right=110, top=410),
+            ft.Image(src=_img("mancha_blanca.png", "mancha blanca.png"), width=280, left=-60, bottom=30),
+            ft.Image(src=_img("burbujas_2.png", "burbujas 2.png"), width=96, left=58, bottom=74),
+            ft.Image(src=_img("hoja_1.png"), width=190, right=-38, bottom=220),
+        ]
+
+    contenido = ft.Container(
+        expand=True,
+        bgcolor=COLOR_FONDO,
+        content=ft.Stack(
+            expand=True,
+            controls=decoracion + [
+                # Ocupa toda la pantalla (left/right/top/bottom = 0) para
+                # que la tarjeta quede centrada y el scroll funcione.
+                ft.Container(
+                    left=0,
+                    right=0,
+                    top=0,
+                    bottom=0,
+                    content=ft.Column(
+                        [
+                            ft.Container(
+                                padding=ft.padding.symmetric(horizontal=12, vertical=20),
+                                content=card_registro,
+                            )
+                        ],
+                        expand=True,
+                        scroll=ft.ScrollMode.AUTO,
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                    ),
+                ),
+            ],
         ),
     )
 
     btn_registrar.on_click = registrar
 
-    return ft.View(route="/registro", controls=[contenido])
+    return ft.View(route="/registro", controls=[contenido], bgcolor=COLOR_FONDO, padding=0)

@@ -5,6 +5,8 @@ Versión compacta: tarjetas cuadradas para usarse dentro de GridView.
 
 import flet as ft
 
+from utilidades.imagenes import foto_bebida
+
 # Compatibilidad entre versiones recientes de Flet
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
@@ -43,21 +45,16 @@ def chip(texto: str, color_bg: str = "#F7E8FF", color_txt: str = "#6D28D9"):
 
 
 def _miniatura_producto(item: dict):
-    """Muestra la foto real del producto si el admin subió una desde
-    Inventario; si no hay foto, cae de vuelta al emoji de siempre."""
-    imagen = (item.get("imagen") or "").strip()
-
-    if imagen:
-        contenido = ft.Image(
-            src=imagen,
-            width=54,
-            height=54,
-            fit=ft.BoxFit.COVER,
-            border_radius=18,
-            error_content=ft.Text(item.get("emoji", "🧋"), size=26),
-        )
-    else:
-        contenido = ft.Text(item.get("emoji", "🧋"), size=26)
+    """Muestra la foto real del producto (guardada en la base de datos
+    por el admin); si no hay foto, cae de vuelta al emoji de siempre."""
+    contenido = foto_bebida(
+        item,
+        lambda: ft.Text(item.get("emoji", "🧋"), size=26),
+        width=54,
+        height=54,
+        fit=ft.BoxFit.COVER,
+        border_radius=18,
+    )
 
     return ft.Container(
         width=54,

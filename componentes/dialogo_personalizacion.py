@@ -2,6 +2,8 @@
 
 import flet as ft
 
+from utilidades.imagenes import foto_bebida
+
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
 
@@ -27,10 +29,8 @@ def obtener_icono(nombre: str, respaldo=None):
 
 
 def _miniatura_encabezado(item: dict):
-    """Foto real del producto (si el admin la subió desde Inventario) o
-    el emoji de respaldo, con una entrada animada tipo "pop"."""
-    imagen = (item.get("imagen") or "").strip()
-
+    """Foto real del producto (guardada en la base de datos por el admin)
+    o el emoji de respaldo, con una entrada animada tipo "pop"."""
     contenedor = ft.Container(
         width=44,
         height=44,
@@ -40,16 +40,12 @@ def _miniatura_encabezado(item: dict):
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         animate_scale=ft.animation.Animation(260, ft.AnimationCurve.EASE_OUT),
         scale=1,
-        content=(
-            ft.Image(
-                src=imagen,
-                width=44,
-                height=44,
-                fit=ft.BoxFit.COVER,
-                error_content=ft.Text(item.get("emoji", "🧋"), size=22),
-            )
-            if imagen
-            else ft.Text(item.get("emoji", "🧋"), size=22)
+        content=foto_bebida(
+            item,
+            lambda: ft.Text(item.get("emoji", "🧋"), size=22),
+            width=44,
+            height=44,
+            fit=ft.BoxFit.COVER,
         ),
     )
     return contenedor

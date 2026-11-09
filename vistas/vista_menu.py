@@ -55,8 +55,11 @@ COLOR_CREMA = "#FFF4EA"
 COLOR_FONDO_SUAVE = "#FBF3FF"
 COLOR_TEXTO = "#2F2437"
 COLOR_TEXTO_SUAVE = "#7C6F86"
-FUENTE_TITULO = "Georgia"
-FUENTE_BASE = "Trebuchet MS"
+# Fuentes del proyecto, registradas en main.py (page.fonts). Antes eran
+# "Georgia" y "Trebuchet MS": Flutter no usa las fuentes del sistema, así
+# que en ningún dispositivo se veían y todo salía en Roboto.
+FUENTE_TITULO = "Fredoka"
+FUENTE_BASE = "Fredoka"
 
 
 def _shadow(blur=24, y=8, color="#00000014"):

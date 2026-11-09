@@ -7,6 +7,7 @@ Así la vista se mantiene más limpia y sólo se encarga de construir la interfa
 import re
 
 from configuracion.base_datos import get_connection
+from servicios.servicio_imagenes_bebidas import obtener_datos_imagenes
 from servicios.servicio_horario import (
     ahora_servidor,
     estado_menu,
@@ -23,6 +24,11 @@ from servicios.servicio_horario import (
 # `productos`/`productosstock`, que son inventario de materias primas
 # (azúcar, leche, toppings) y no bebidas del menú.
 #
+# La foto de cada bebida vive en la tabla `bebidas_imagenes` (en la
+# nube), para que se vea en cualquier dispositivo y en el APK. La
+# columna `bebidas.Imagen` es la ruta vieja en assets/bebidas y solo
+# se conserva como respaldo mientras no se migren las fotos.
+#
 # Emoji de respaldo por nombre, para cuando la bebida todavía no tiene
 # foto subida por el admin.
 EMOJIS_POR_NOMBRE = {
@@ -35,6 +41,28 @@ EMOJIS_POR_NOMBRE = {
     "smoothie mango": "🥭",
     "frappé vainilla": "🍦",
 }
+
+# LEFT JOIN: trae la versión de la foto (Actualizado) sin descargarla.
+# La foto solo se descarga si no está ya en memoria o si cambió.
+_SQL_BEBIDAS_CON_FOTO = """
+    SELECT b.IdBebida, b.Nombre, b.Precio, b.Descripcion, b.Categoria, b.Imagen,
+           bi.Actualizado AS ImagenVersion
+    FROM bebidas b
+    LEFT JOIN bebidas_imagenes bi ON bi.IdBebida = b.IdBebida
+    WHERE b.Disponible = 1
+    ORDER BY b.Nombre
+"""
+
+# Respaldo mientras no se aplique migracion_imagenes_bebidas.sql.
+_SQL_BEBIDAS_SIN_FOTO = """
+    SELECT IdBebida, Nombre, Precio, Descripcion, Categoria, Imagen
+    FROM bebidas
+    WHERE Disponible = 1
+    ORDER BY Nombre
+"""
+
+# MySQL: "la tabla no existe"
+_ERROR_TABLA_NO_EXISTE = 1146
 
 
 def obtener_bebidas() -> list[dict]:
@@ -49,19 +77,26 @@ def obtener_bebidas() -> list[dict]:
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
-        cur.execute(
-            """
-            SELECT IdBebida, Nombre, Precio, Descripcion, Categoria, Imagen
-            FROM bebidas
-            WHERE Disponible = 1
-            ORDER BY Nombre
-            """
-        )
+        try:
+            cur.execute(_SQL_BEBIDAS_CON_FOTO)
+        except Exception as error:
+            # Sin la tabla bebidas_imagenes el menú sigue funcionando
+            # con los emojis, en lugar de quedarse vacío.
+            if getattr(error, "errno", None) != _ERROR_TABLA_NO_EXISTE:
+                raise
+            cur.execute(_SQL_BEBIDAS_SIN_FOTO)
         filas = cur.fetchall() or []
     except Exception:
         filas = []
     finally:
         cerrar_conexion(conn, cur)
+
+    versiones = {
+        fila.get("IdBebida"): fila.get("ImagenVersion")
+        for fila in filas
+        if fila.get("ImagenVersion") is not None
+    }
+    fotos = obtener_datos_imagenes(versiones) if versiones else {}
 
     bebidas = []
     for fila in filas:
@@ -76,6 +111,7 @@ def obtener_bebidas() -> list[dict]:
                 "categoria": str(fila.get("Categoria") or "General"),
                 "emoji": EMOJIS_POR_NOMBRE.get(clave, "🧋"),
                 "imagen": (fila.get("Imagen") or "").strip() or None,
+                "imagen_datos": fotos.get(fila.get("IdBebida")),
             }
         )
     return bebidas
