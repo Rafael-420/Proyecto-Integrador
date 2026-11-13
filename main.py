@@ -62,14 +62,33 @@ CARPETA_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "asset
 # cada URL de subida con FLET_SECRET_KEY; sin esa variable la subida
 # falla. Si no viene en el .env se genera una al azar en cada arranque,
 # que es suficiente porque las URLs de subida duran unos minutos.
-os.makedirs(CARPETA_SUBIDAS, exist_ok=True)
-os.environ.setdefault("FLET_SECRET_KEY", secrets.token_hex(32))
+#
+# Renderizador web: CANVAS_KIT.
+# Sin indicarlo, Flet usa "auto" y el navegador elige skwasm (el
+# renderizador experimental en WebAssembly). Con skwasm, al escribir en
+# un campo de texto, sobre todo en el navegador del celular, el texto se
+# empezaba a dibujar con letras faltantes o encimadas ("Último cambio:
+# dmin, 13/11/2 26") y después la pestaña se reiniciaba; en la consola
+# solo quedaba "WebSocketDisconnect" porque el navegador se desconectó.
+# CanvasKit es el renderizador estable de Flutter web.
+#
+# En el APK no aplica: ahí Flutter dibuja de forma nativa.
+EN_APK = os.getenv("FLET_PLATFORM") is not None
 
-ft.app(
-    target=main,
-    view=WEB_VIEW,
-    host="0.0.0.0",
-    port=8550,
-    assets_dir=CARPETA_ASSETS,
-    upload_dir=str(CARPETA_SUBIDAS),
-)
+if EN_APK:
+    # App empaquetada (APK): la interfaz y Python corren dentro del
+    # celular. No hay servidor web, ni puerto, ni subidas.
+    ft.app(target=main, assets_dir=CARPETA_ASSETS)
+else:
+    os.makedirs(CARPETA_SUBIDAS, exist_ok=True)
+    os.environ.setdefault("FLET_SECRET_KEY", secrets.token_hex(32))
+
+    ft.app(
+        target=main,
+        view=WEB_VIEW,
+        host="0.0.0.0",
+        port=8550,
+        assets_dir=CARPETA_ASSETS,
+        upload_dir=str(CARPETA_SUBIDAS),
+        web_renderer=ft.WebRenderer.CANVAS_KIT,
+    )
