@@ -1,0 +1,36 @@
+# ============================================================
+# Corallie Bubble - archivos que NO se suben a GitHub (D-21)
+# ============================================================
+
+# Credenciales: Railway, correo SMTP y base de pruebas.
+.env
+.env.*
+!.env.ejemplo
+.env copy
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Archivos que genera la app en cada equipo
+subidas/
+*.log
+
+# Compilaciones de Flet (APK, ejecutables)
+build/
+dist/
+
+# Editores y sistema operativo
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
+.DS_Store

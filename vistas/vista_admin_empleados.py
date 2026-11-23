@@ -1,5 +1,7 @@
 import flet as ft
 from configuracion.base_datos import get_connection
+from configuracion.variables import ROL_EMPLEADO
+from servicios.servicio_seguridad import hashear
 from componentes.appbar_admin import build_admin_appbar
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
@@ -244,9 +246,11 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             conn = get_connection()
             conn.start_transaction()
             cur  = conn.cursor()
+            # D-19 y D-20: la contraseña se guarda con hash PBKDF2 y la
+            # cuenta nace con rol EMPLEADO (sin Rol quedaba como CLIENTE).
             cur.execute(
-                "INSERT INTO usuario (NombreUsuario, Contraseña) VALUES (%s, %s)",
-                (usuario, password),
+                "INSERT INTO usuario (NombreUsuario, Contraseña, Rol) VALUES (%s, %s, %s)",
+                (usuario, hashear(password), ROL_EMPLEADO),
             )
             id_usuario = cur.lastrowid
             cur.execute(
@@ -286,9 +290,10 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             id_usuario = int(row["Usuario_IdUsuario"])
 
             if password:
+                # D-19: la nueva contraseña tambien se guarda con hash.
                 cur.execute(
                     "UPDATE usuario SET NombreUsuario=%s, Contraseña=%s WHERE IdUsuario=%s",
-                    (nombre_usuario, password, id_usuario),
+                    (nombre_usuario, hashear(password), id_usuario),
                 )
             else:
                 cur.execute(

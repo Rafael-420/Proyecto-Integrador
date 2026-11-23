@@ -177,6 +177,7 @@ def abrir_dialogo_personalizacion(
         multiline=True,
         min_lines=2,
         max_lines=3,
+        max_length=80,  # D-16: limite de caracteres por bebida
         hint_text="Ej. sin hielo, extra dulce, poca tapioca...",
         value=prep_inicial.get("notas", ""),
     )

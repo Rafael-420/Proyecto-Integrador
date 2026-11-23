@@ -125,15 +125,18 @@ def estado_bloqueo(nombre_usuario: str) -> tuple[bool, int, int]:
     maximos = int(SEG_INTENTOS_MAXIMOS)
     ventana = int(SEG_VENTANA_MINUTOS)
     bloqueo = int(SEG_MINUTOS_BLOQUEO)
-    desde = datetime.now() - timedelta(minutes=ventana)
 
+    # D-18: FechaIntento la pone el servidor (UTC en Railway), asi que la
+    # ventana y la liberacion se calculan con la hora del servidor (NOW())
+    # y no con la del equipo, que va 6 horas atras.
     try:
         with cursor_bd() as cur:
             cur.execute(
-                "SELECT COUNT(*) AS fallidos, MAX(FechaIntento) AS ultimo "
+                "SELECT COUNT(*) AS fallidos, MAX(FechaIntento) AS ultimo, NOW() AS ahora "
                 "FROM intentos_login "
-                "WHERE NombreUsuario = %s AND Exitoso = 0 AND FechaIntento >= %s",
-                (nombre_usuario, desde),
+                "WHERE NombreUsuario = %s AND Exitoso = 0 "
+                "AND FechaIntento >= NOW() - INTERVAL %s MINUTE",
+                (nombre_usuario, ventana),
             )
             fila = cur.fetchone() or {}
     except Exception:
@@ -141,6 +144,9 @@ def estado_bloqueo(nombre_usuario: str) -> tuple[bool, int, int]:
 
     fallidos = int(fila.get("fallidos") or 0)
     ultimo = fila.get("ultimo")
+    ahora = fila.get("ahora")
+    if not isinstance(ahora, datetime):
+        ahora = datetime.now()
 
     if fallidos < maximos:
         return False, 0, max(maximos - fallidos, 0)
@@ -149,11 +155,14 @@ def estado_bloqueo(nombre_usuario: str) -> tuple[bool, int, int]:
         return True, bloqueo, 0
 
     liberacion = ultimo + timedelta(minutes=bloqueo)
-    if datetime.now() >= liberacion:
+    if ahora >= liberacion:
         _limpiar_intentos(nombre_usuario)
         return False, 0, maximos
 
-    restantes = int((liberacion - datetime.now()).total_seconds() // 60) + 1
+    # Minutos completos que faltan, redondeando hacia arriba: con la hora
+    # del servidor (sin fracciones de segundo) la cuenta "+ 1" daba 16.
+    segundos = (liberacion - ahora).total_seconds()
+    restantes = max(1, int(-(-segundos // 60)))
     return True, restantes, 0
 
 

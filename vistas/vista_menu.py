@@ -871,6 +871,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             multiline=True,
             min_lines=2,
             max_lines=3,
+            max_length=120,  # D-16: limite de caracteres
             hint_text="Ej. para llevar, sin popote...",
         )
 

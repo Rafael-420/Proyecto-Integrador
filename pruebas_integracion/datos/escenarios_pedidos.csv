@@ -1,0 +1,35 @@
+id,descripcion,productos,total,estado_previo,local,resultado_esperado
+01,Una bebida con el local abierto,Taro Milk Tea (x1) [Tamaño: Mediano],65,ninguno,abierto,aceptado
+02,Tres bebidas distintas,Taro (x1) [M] / Matcha (x1) [M] / Chocolate (x1) [M],201,ninguno,abierto,aceptado
+03,Una línea con tres piezas,Taro Milk Tea (x3) [Tamaño: Mediano],195,ninguno,abierto,aceptado
+04,Dos más una pieza,Taro (x2) [M] / Matcha (x1) [M],199,ninguno,abierto,aceptado
+05,Cuatro bebidas distintas,Taro (x1) / Matcha (x1) / Chocolate (x1) / Mango (x1),262,ninguno,abierto,max_bebidas
+06,Una línea con cuatro piezas,Taro Milk Tea (x4) [Tamaño: Mediano],260,ninguno,abierto,max_bebidas
+07,Dos más dos piezas,Taro (x2) [M] / Matcha (x2) [M],268,ninguno,abierto,max_bebidas
+08,Tres líneas sin cantidad,Taro [M] / Matcha [M] / Chocolate [M],201,ninguno,abierto,aceptado
+09,Cuatro líneas sin cantidad,Taro [M] / Matcha [M] / Chocolate [M] / Mango [M],262,ninguno,abierto,max_bebidas
+10,Cantidad con espacio dentro,Taro (x 2) [M] / Matcha (x1) [M],199,ninguno,abierto,aceptado
+11,Pedido sin productos,,65,ninguno,abierto,ValueError
+12,Productos solo con espacios,"   ",65,ninguno,abierto,ValueError
+13,Total en cero,Taro Milk Tea (x1),0,ninguno,abierto,ValueError
+14,Total negativo,Taro Milk Tea (x1),-10,ninguno,abierto,ValueError
+15,Total mínimo de un centavo,Taro Milk Tea (x1),0.01,ninguno,abierto,aceptado
+16,Texto de exactamente 1500 caracteres,{texto:1500},65,ninguno,abierto,aceptado
+17,Texto de 1501 caracteres,{texto:1501},65,ninguno,abierto,pedido_largo
+18,Ya tiene un pedido realizado,Taro Milk Tea (x1),65,realizado,abierto,pedido_activo
+19,Ya tiene un pedido en preparación,Taro Milk Tea (x1),65,en_preparacion,abierto,pedido_activo
+20,Ya tiene un pedido pagado sin entregar,Taro Milk Tea (x1),65,pagado,abierto,pedido_activo
+21,Su pedido anterior ya se entregó,Taro Milk Tea (x1),65,entregado,abierto,aceptado
+22,Su pedido anterior se canceló,Taro Milk Tea (x1),65,cancelado,abierto,aceptado
+23,Tiene un pedido no recogido,Taro Milk Tea (x1),65,no_recogido,abierto,adeudo
+24,Servicio pausado por el administrador,Taro Milk Tea (x1),65,ninguno,pausado,servicio_pausado
+25,Hoy es un día cerrado,Taro Milk Tea (x1),65,ninguno,dia_cerrado,dia_cerrado
+26,Hoy es día de descanso,Taro Milk Tea (x1),65,ninguno,descanso,descanso
+27,La caja no ha mandado señal,Taro Milk Tea (x1),65,ninguno,caja_desconectada,caja_desconectada
+28,Antes de la hora de apertura,Taro Milk Tea (x1),65,ninguno,antes_de_abrir,antes_de_abrir
+29,Después de la hora de cierre,Taro Milk Tea (x1),65,ninguno,despues_de_cerrar,despues_de_cerrar
+30,Adeudo con el servicio pausado: manda el horario,Taro Milk Tea (x1),65,no_recogido,pausado,servicio_pausado
+31,Cuatro bebidas con el servicio pausado: manda el límite,Taro (x4) [M],260,ninguno,pausado,max_bebidas
+32,Acentos y eñe en las indicaciones,Té Piña (x1) [Notas: sin azúcar ni hielo],65,ninguno,abierto,aceptado
+33,Emoji en las indicaciones,Taro Milk Tea (x1) [Notas: para mi novia 💜🧋],65,ninguno,abierto,aceptado
+34,Comillas y punto y coma en las indicaciones,"Taro (x1) [Notas: ""sin popote""; tapa sellada]",65,ninguno,abierto,aceptado

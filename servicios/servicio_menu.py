@@ -173,6 +173,11 @@ ESTATUS_ACTIVOS = (ESTATUS_PAGADO, ESTATUS_EN_PREPARACION, ESTATUS_PEDIDO_REALIZ
 MAX_BEBIDAS_POR_PEDIDO = 3
 MINUTOS_PARA_NO_RECOGIDO = 120
 
+# Largo maximo del texto del pedido (D-16). Tres bebidas con todas las
+# opciones e indicaciones miden unos 800 caracteres; el limite solo
+# frena un texto anormal antes de que llegue a la base de datos.
+MAX_CARACTERES_PEDIDO = 1500
+
 SEPARADOR_PRODUCTOS = " / "
 
 
@@ -512,6 +517,16 @@ def insertar_pedido(
             detalles={"bebidas": bebidas, "maximo": MAX_BEBIDAS_POR_PEDIDO},
         )
 
+    # D-16: un texto demasiado largo se rechaza con un mensaje para el
+    # cliente, en lugar de un error de MySQL. El carrito se conserva.
+    if len(producto_texto) > MAX_CARACTERES_PEDIDO:
+        raise PedidoNoPermitido(
+            "Tu pedido tiene indicaciones demasiado largas. "
+            "Acórtalas e inténtalo de nuevo.",
+            motivo="pedido_largo",
+            detalles={"caracteres": len(producto_texto), "maximo": MAX_CARACTERES_PEDIDO},
+        )
+
     # Horario del local e interruptor del administrador. Se revisa aquí
     # aunque la vista ya deshabilite el botón: el cliente pudo abrir el
     # menú a las 20:58 y confirmar a las 21:03.
@@ -532,6 +547,16 @@ def insertar_pedido(
     try:
         conn = get_connection()
         cur = conn.cursor()
+
+        # D-17: se bloquea la fila del cliente hasta el commit. Si llegan
+        # dos confirmaciones a la vez (doble toque o dos dispositivos), la
+        # segunda espera aqui y, al continuar, ya ve el pedido de la
+        # primera, asi que la regla de un solo pedido activo se cumple.
+        cur.execute(
+            "SELECT IdCliente FROM cliente WHERE IdCliente = %s FOR UPDATE",
+            (int(cliente_id),),
+        )
+        cur.fetchall()
 
         # Las reglas se revisan con el mismo cursor, justo antes de
         # insertar, para que la vista no pueda saltárselas.
