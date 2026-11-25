@@ -1,3 +1,4 @@
+import asyncio
 import json
 from time import monotonic
 
@@ -7,10 +8,20 @@ from componentes.sidebar_menu import build_menu_sidebar, menu_layout
 from componentes.tarjeta_producto import tarjeta_producto
 from componentes.dialogo_personalizacion import abrir_dialogo_personalizacion
 from componentes.tarjeta_pedido import (
+    ESTATUS_CANCELADO,
+    ESTATUS_EN_PREPARACION,
+    ESTATUS_ENTREGADO,
+    ESTATUS_NO_RECOGIDO,
+    ESTATUS_PAGADO,
+    ESTATUS_PEDIDO_REALIZADO,
+    chip_estatus,
+    id_estatus,
+    mensaje_estatus,
     tarjeta_carrito,
     tarjeta_historial,
     tarjeta_estado,
     tarjeta_mensaje,
+    texto_estatus,
 )
 from servicios.servicio_menu import (
     resolver_cliente_id,
@@ -344,6 +355,13 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         except Exception:
             pass
 
+    def _id_notificacion_pedido(row: dict) -> str:
+        # Pedido + estatus ("16:2"). Antes era solo el número de pedido:
+        # una vez leída la notificación, los cambios de estatus que hacía
+        # caja ya no volvían a marcar la campana. Ahora cada estatus nuevo
+        # cuenta como una notificación nueva.
+        return f"{row.get('IdGenerarPedido')}:{id_estatus(row)}"
+
     def marcar_historial_actual_como_leido_al_entrar():
         # Al iniciar sesión, los pedidos que ya existían no deben contarse como nuevos.
         if cliente_id is None:
@@ -351,7 +369,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
 
         try:
             for row in obtener_historial(cliente_id, 30) or []:
-                notificaciones_leidas.add(str(row.get("IdGenerarPedido")))
+                notificaciones_leidas.add(_id_notificacion_pedido(row))
             guardar_notificaciones_leidas()
         except Exception:
             pass
@@ -971,9 +989,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             ultimo_pedido["id"] = pedido_id
 
             # El pedido recién creado sí debe aparecer como nuevo hasta que el cliente lo abra.
-            pedido_id_str = str(pedido_id)
-            if pedido_id_str in notificaciones_leidas:
-                notificaciones_leidas.remove(pedido_id_str)
+            notificaciones_leidas.discard(f"{pedido_id}:{ESTATUS_PEDIDO_REALIZADO}")
             guardar_notificaciones_leidas()
 
             lbl_confirmacion_pedido.value = f"Pedido #{pedido_id} confirmado"
@@ -1008,6 +1024,8 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
                 width=520,
                 content=ft.Column(
                     controls=[
+                        ft.Row([chip_estatus(row)]),
+                        ft.Text(mensaje_estatus(row), size=12, color="#7C3AED"),
                         ft.Text(
                             f"Fecha: {row.get('FechaPedido')}  Hora: {row.get('HoraPedido')}",
                             size=12,
@@ -1185,19 +1203,16 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
     # --------------------------------------------------------
     # Centro de notificaciones
     # --------------------------------------------------------
-    def _id_notificacion_pedido(row: dict) -> str:
-        # Se usa únicamente el ID del pedido para comparar siempre como texto.
-        return str(row.get("IdGenerarPedido"))
-
-    def contar_notificaciones() -> int:
+    def contar_notificaciones(rows: list | None = None) -> int:
         total = 0
         if contar_carrito() > 0 and "carrito" not in notificaciones_leidas:
             total += 1
         try:
-            if cliente_id is not None:
-                for row in (obtener_historial(cliente_id, 30) or []):
-                    if _id_notificacion_pedido(row) not in notificaciones_leidas:
-                        total += 1
+            if rows is None and cliente_id is not None:
+                rows = obtener_historial(cliente_id, 30) or []
+            for row in rows or []:
+                if _id_notificacion_pedido(row) not in notificaciones_leidas:
+                    total += 1
         except Exception:
             pass
         return total
@@ -1212,11 +1227,20 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
 
     badge_notificaciones_box = ft.Container()
 
-    def actualizar_badge_notificaciones():
-        total = contar_notificaciones()
+    # La campana se pinta en rosa y cambia de ícono cuando hay algo nuevo.
+    icono_campana = ft.Icon(_icon("NOTIFICATIONS", "NOTIFICATIONS_NONE"), color=COLOR_MORADO, size=27)
+
+    def actualizar_badge_notificaciones(rows: list | None = None):
+        total = contar_notificaciones(rows)
         badge_notificaciones.value = str(total)
         try:
             badge_notificaciones_box.visible = total > 0
+            icono_campana.name = (
+                _icon("NOTIFICATIONS_ACTIVE", "NOTIFICATIONS")
+                if total > 0
+                else _icon("NOTIFICATIONS", "NOTIFICATIONS_NONE")
+            )
+            icono_campana.color = COLOR_ROSA_FUERTE if total > 0 else COLOR_MORADO
         except Exception:
             pass
 
@@ -1312,21 +1336,25 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         except Exception:
             rows = []
 
-        for row in rows:
-            estado = str(row.get("Estatus") or "Pedido Realizado")
-            pedido_id = row.get("IdGenerarPedido")
-            estado_lower = estado.lower()
+        # Ícono y color por número de estatus (igual que las tarjetas de
+        # Historial y Estado), para que todo diga lo mismo.
+        estilos = {
+            ESTATUS_PEDIDO_REALIZADO: ("⏳", "#FEF3C7", "Tu pedido llegó a caja. En cuanto lo confirmen empezamos a prepararlo."),
+            ESTATUS_EN_PREPARACION: ("🧋", "#F3E8FF", "Tu pago se registró y nuestros baristas ya preparan tu bebida."),
+            ESTATUS_PAGADO: ("💳", "#E0F2FE", "Tu pago fue registrado correctamente."),
+            ESTATUS_ENTREGADO: ("🎉", "#DCFCE7", "Pedido entregado. Esperamos que lo disfrutes."),
+            ESTATUS_CANCELADO: ("🚫", "#F3F4F6", "Este pedido fue cancelado."),
+            ESTATUS_NO_RECOGIDO: ("⚠️", "#FEE2E2", "No pasaste por este pedido. Págalo en el local para volver a pedir."),
+        }
 
-            if "listo" in estado_lower:
-                icono, color, descripcion = "✅", "#DCFCE7", "Tu bebida está lista para recoger."
-            elif "prepar" in estado_lower:
-                icono, color, descripcion = "🧋", "#F3E8FF", "Nuestros baristas están preparando tu bebida."
-            elif "entreg" in estado_lower:
-                icono, color, descripcion = "🎉", "#FEF3C7", "Pedido entregado. Esperamos que lo disfrutes."
-            elif "cobrad" in estado_lower:
-                icono, color, descripcion = "💳", "#E0F2FE", "Tu pago fue registrado correctamente."
-            else:
-                icono, color, descripcion = "📦", "#FCE7F3", "Tu pedido fue recibido correctamente."
+        for row in rows:
+            estado = texto_estatus(row)
+            pedido_id = row.get("IdGenerarPedido")
+            icono, color, descripcion = estilos.get(
+                id_estatus(row), ("📦", "#FCE7F3", "Tu pedido fue recibido correctamente.")
+            )
+            if estado == "Pagado en mostrador":
+                icono, color, descripcion = "💳", "#E0F2FE", mensaje_estatus(row)
 
             notificaciones.append(
                 crear_notificacion(
@@ -1590,7 +1618,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             controls=[
                 ft.Container(
                     alignment=ALIGN_CENTER,
-                    content=ft.Icon(_icon("NOTIFICATIONS", "NOTIFICATIONS_NONE"), color=COLOR_MORADO, size=27),
+                    content=icono_campana,
                 ),
                 badge_notificaciones_box,
             ],
@@ -1707,9 +1735,85 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
     actualizar_total()
     actualizar_badge_notificaciones()
 
-    return ft.View(
+    vista = ft.View(
         route="/menu",
         controls=[layout],
         bgcolor=COLOR_FONDO_SUAVE,
         padding=0,
     )
+
+    # --------------------------------------------------------
+    # Cambios de estatus hechos en caja
+    # --------------------------------------------------------
+    # Antes la campana solo se recalculaba cuando el cliente hacía algo en
+    # su pantalla: si caja cobraba o entregaba el pedido, el cliente no se
+    # enteraba hasta moverse de sección. Ahora se revisan sus pedidos cada
+    # SEGUNDOS_REVISION_PEDIDOS; si alguno cambió de estatus, se marca la
+    # campana, se avisa con un mensaje y se refresca la sección abierta.
+    SEGUNDOS_REVISION_PEDIDOS = 15
+    estatus_conocidos = {"valor": None}  # {IdGenerarPedido: estatus}
+
+    def _revisar_pedidos():
+        """Se ejecuta fuera de la interfaz. Devuelve los avisos a mostrar,
+        o None si nada cambió."""
+        rows = obtener_historial(cliente_id, 30) or []
+        actual = {row.get("IdGenerarPedido"): id_estatus(row) for row in rows}
+        anterior = estatus_conocidos["valor"]
+        estatus_conocidos["valor"] = actual
+        if actual == anterior:
+            return None
+
+        avisos = []
+        if anterior is not None:
+            for row in rows:
+                pid = row.get("IdGenerarPedido")
+                if pid in anterior and anterior[pid] != actual[pid] and actual[pid] != ESTATUS_CANCELADO:
+                    avisos.append(f"Pedido #{pid}: {texto_estatus(row)}")
+
+        actualizar_badge_notificaciones(rows)
+        if seccion_actual["value"] == "historial":
+            build_historial()
+        elif seccion_actual["value"] == "estado":
+            build_estado()
+        return avisos
+
+    async def _vigilar_pedidos():
+        ya_visible = False
+        intentos_sin_vista = 0
+        while True:
+            await asyncio.sleep(SEGUNDOS_REVISION_PEDIDOS)
+
+            vistas = list(getattr(page, "views", None) or [])
+            if any(v is vista for v in vistas):
+                ya_visible = True
+            elif ya_visible:
+                break  # cerró sesión o salió del menú
+            else:
+                intentos_sin_vista += 1
+                if intentos_sin_vista >= 8:
+                    break
+                continue
+            if vistas[-1] is not vista:
+                continue  # hay otra pantalla encima
+
+            try:
+                avisos = await asyncio.to_thread(_revisar_pedidos)
+            except Exception:
+                continue  # sin conexión: se reintenta en la siguiente vuelta
+            if avisos is None:
+                continue
+            try:
+                if avisos:
+                    _show_snack(page, "🔔 " + " · ".join(avisos))
+                else:
+                    page.update()
+            except Exception:
+                pass
+
+    if cliente_id is not None:
+        try:
+            page.run_task(_vigilar_pedidos)
+        except Exception:
+            pass
+
+    return vista

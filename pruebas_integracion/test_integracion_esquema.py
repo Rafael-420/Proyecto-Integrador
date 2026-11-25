@@ -137,7 +137,7 @@ class TestEsquemaQueUsaElCodigo(bp.BaseIntegracion):
         """CP-ESQ-08: los textos de estatus que escribe el codigo caben en generarpedido.Estatus."""
         largo = self._columnas("generarpedido")["Estatus"]["largo"]
         textos = (
-            "Pedido Realizado", "En preparación", "Listo para entrega",
+            "Pedido Realizado", "En preparación", "Entregado",
             "Pagado en mostrador", "No recogido", "Cancelado", "Pagado",
         )
         for texto in textos:

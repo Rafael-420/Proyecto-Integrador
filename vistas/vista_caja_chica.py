@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 
 from configuracion.base_datos import get_connection
+from utilidades.flet_compat import al_seleccionar, limpiar_monto, solo_numeros
 from componentes.sidebar import build_sidebar, sidebar_layout
 from servicios.servicio_menu import (
     ESTATUS_NO_RECOGIDO,
@@ -755,7 +756,12 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                     EstatusPedido_IdEstatusPedido = %s
                 WHERE IdGenerarPedido = %s
                 """,
-                ("Listo para entrega", 4, int(pedido_id)),
+                # El empleado pulsa este botón cuando ya le dio la bebida
+                # al cliente: el pedido queda como Entregado (estatus 4).
+                # Antes se guardaba el texto "Listo para entrega" con el
+                # estatus de entregado, y el cliente veía su pedido como
+                # pendiente de recoger aunque ya se lo hubiera llevado.
+                ("Entregado", 4, int(pedido_id)),
             )
             conn.commit()
         except Exception:
@@ -803,21 +809,8 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         col={"xs": 12},
     )
 
-    def _filtrar_monto(e=None):
-        valor = txt_monto.value or ""
-        limpio = re.sub(r"[^0-9.]", "", valor)
-        # Permitir solo un punto decimal
-        if limpio.count(".") > 1:
-            primera, resto = limpio.split(".", 1)
-            limpio = primera + "." + resto.replace(".", "")
-        if limpio != valor:
-            txt_monto.value = limpio
-            try:
-                txt_monto.update()
-            except Exception:
-                page.update()
-
-    txt_monto.on_change = _filtrar_monto
+    # Mismo filtro que el efectivo recibido: el teclado ya no escribe letras.
+    solo_numeros(txt_monto)
 
     # Movimientos recientes: antes era un DataTable de 6 columnas que en
     # el celular (y en la columna angosta de escritorio) obligaba a
@@ -1160,7 +1153,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         dlg.actions = [
             ft.TextButton("Cerrar", on_click=lambda e: _close_dialog(page, dlg)),
             ft.ElevatedButton(
-                "Listo para entrega" if es_preparacion else "Cobrar pedido",
+                "Entregar pedido" if es_preparacion else "Cobrar pedido",
                 icon=ICON_CHECK if es_preparacion else ICON_PAYMENT,
                 bgcolor="#C86DD7",
                 color="white",
@@ -1183,7 +1176,21 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             options=[ft.dropdown.Option("Efectivo"), ft.dropdown.Option("Tarjeta"), ft.dropdown.Option("Transferencia")],
             col={"xs": 12, "sm": 6},
         )
-        txt_recibido = ft.TextField(label="Efectivo recibido", border_radius=12, keyboard_type=ft.KeyboardType.NUMBER, value=str(total), col={"xs": 12, "sm": 6})
+        txt_recibido = ft.TextField(
+            label="Efectivo recibido",
+            border_radius=12,
+            keyboard_type=ft.KeyboardType.NUMBER,
+            value=limpiar_monto(f"{total:.2f}"),
+            hint_text="0.00",
+            col={"xs": 12, "sm": 6},
+        )
+        # Signo de pesos antes de la cantidad. En Flet 0.80 se llama
+        # `prefix` y recibe un control; prefix_text ya no existe y
+        # tronaba el diálogo de cobro.
+        try:
+            txt_recibido.prefix = ft.Text("$ ")
+        except Exception:
+            pass
         lbl_cambio = ft.Text(_money(0), size=22, weight="bold", color="#2E7D32")
         lbl_error_pago = ft.Text("", size=12, color="#C62828")
         lbl_balance = ft.Text(_money(obtener_balance_actual()), weight="bold")
@@ -1217,7 +1224,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                 page.update()
                 return
             try:
-                recibido = float((txt_recibido.value or "0").replace(",", ""))
+                recibido = float(limpiar_monto(txt_recibido.value) or 0)
             except Exception:
                 recibido = 0
             cambio = recibido - total
@@ -1226,8 +1233,12 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                 lbl_error_pago.value = "El efectivo recibido no alcanza para cubrir el total."
             page.update()
 
-        dd_metodo.on_change = calcular_cambio
-        txt_recibido.on_change = calcular_cambio
+        # Solo números en el efectivo recibido (antes aceptaba letras) y el
+        # cambio se recalcula en cada tecla.
+        solo_numeros(txt_recibido, al_cambiar=calcular_cambio)
+        # Flet 0.80 usa on_select en los Dropdown: con on_change el campo de
+        # efectivo no se ocultaba al elegir tarjeta o transferencia.
+        al_seleccionar(dd_metodo, calcular_cambio)
 
         dlg = ft.AlertDialog(
             modal=True,
@@ -1254,12 +1265,12 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             recibido = total
             cambio = 0.0
             if metodo == "Efectivo":
-                try:
-                    recibido = float((txt_recibido.value or "0").replace(",", ""))
-                except Exception:
+                texto_recibido = limpiar_monto(txt_recibido.value)
+                if not texto_recibido or texto_recibido == ".":
                     lbl_error_pago.value = "Ingresa una cantidad válida."
                     page.update()
                     return
+                recibido = float(texto_recibido)
                 if recibido < total:
                     lbl_error_pago.value = "El efectivo recibido no alcanza para cubrir el total."
                     page.update()
@@ -1445,20 +1456,20 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
 
     def confirmar_listo_entrega(pedido: dict):
         pedido_id = int(pedido.get("IdGenerarPedido"))
-        dlg = ft.AlertDialog(modal=True, title=ft.Text(f"Pedido #{pedido_id} listo"), content=ft.Text("¿Deseas marcar este pedido como listo para entrega?"), actions=[])
+        dlg = ft.AlertDialog(modal=True, title=ft.Text(f"Entregar pedido #{pedido_id}"), content=ft.Text("¿Ya le entregaste la bebida al cliente? El pedido quedará como entregado."), actions=[])
 
         def aceptar(e=None):
             try:
                 db_marcar_listo_entrega(pedido_id)
                 _close_dialog(page, dlg)
                 recargar_todo()
-                _show_snack(page, f"Pedido #{pedido_id} marcado como listo para entrega.")
+                _show_snack(page, f"Pedido #{pedido_id} entregado.")
             except Exception as ex:
                 _show_snack(page, f"No se pudo actualizar el pedido: {ex}", ok=False)
 
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda e: _close_dialog(page, dlg)),
-            ft.ElevatedButton("Listo para entrega", bgcolor="#C86DD7", color="white", icon=ICON_CHECK, on_click=aceptar),
+            ft.ElevatedButton("Pedido entregado", bgcolor="#C86DD7", color="white", icon=ICON_CHECK, on_click=aceptar),
         ]
         dlg.actions_alignment = ft.MainAxisAlignment.END
         _open_dialog(page, dlg)
@@ -1475,7 +1486,7 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
             lineas_detalle=3,
             botones=[
                 ft.ElevatedButton(
-                    "Listo para entrega",
+                    "Entregar pedido",
                     icon=ICON_CHECK,
                     bgcolor=LILA,
                     color="white",

@@ -1,5 +1,7 @@
 """Funciones de compatibilidad para distintas versiones de Flet."""
 
+import re
+
 import flet as ft
 
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -197,3 +199,80 @@ def set_texto_boton(boton, texto: str):
         setattr(boton, atributo, texto)
     except Exception:
         pass
+
+# ------------------------------------------------------------
+# Menús desplegables (Dropdown)
+# ------------------------------------------------------------
+# Hasta Flet 0.28 el Dropdown avisaba el cambio con on_change; desde 0.80
+# ese evento ya no existe y se llama on_select. Asignar on_change en 0.80
+# no falla, pero nunca se ejecuta: por eso el precio no cambiaba al
+# elegir otro tamaño y el campo de efectivo no se ocultaba al elegir
+# tarjeta.
+
+def al_seleccionar(dropdown, manejador):
+    """Ejecuta `manejador` cuando cambia la opción, en cualquier versión de Flet."""
+    if dropdown is None:
+        return
+    for evento in ("on_select", "on_change"):
+        if hasattr(type(dropdown), evento):
+            try:
+                setattr(dropdown, evento, manejador)
+            except Exception:
+                pass
+
+
+# ------------------------------------------------------------
+# Campos de dinero: solo números
+# ------------------------------------------------------------
+_NO_NUMERICO = re.compile(r"[^0-9.]")
+
+
+def limpiar_monto(texto: str, decimales: int = 2) -> str:
+    """Deja solo dígitos y un punto decimal, con máximo `decimales` decimales."""
+    limpio = _NO_NUMERICO.sub("", str(texto or ""))  # la coma de miles se descarta
+    if "." in limpio:
+        entero, resto = limpio.split(".", 1)
+        limpio = entero + "." + resto.replace(".", "")[:decimales]
+    return limpio
+
+
+def solo_numeros(campo, al_cambiar=None, decimales: int = 2):
+    """Hace que un TextField acepte únicamente cantidades de dinero.
+
+    Dos capas:
+      1. input_filter (Flet 0.2x y 0.80+): el teclado ni siquiera escribe
+         letras ni símbolos.
+      2. Limpieza en on_change: cubre lo que el filtro deja pasar (pegar
+         texto, dos puntos decimales, más de dos decimales) y versiones
+         de Flet sin input_filter.
+
+    `al_cambiar` se ejecuta después de limpiar el valor (por ejemplo, para
+    recalcular el cambio).
+    """
+    if campo is None:
+        return
+
+    filtro = getattr(ft, "InputFilter", None)
+    if filtro is not None:
+        try:
+            campo.input_filter = filtro(regex_string=r"[0-9.]", allow=True, replacement_string="")
+        except Exception:
+            pass
+    try:
+        campo.keyboard_type = ft.KeyboardType.NUMBER
+    except Exception:
+        pass
+
+    def manejador(e=None):
+        valor = campo.value or ""
+        limpio = limpiar_monto(valor, decimales)
+        if limpio != valor:
+            campo.value = limpio
+            try:
+                campo.update()
+            except Exception:
+                pass
+        if al_cambiar is not None:
+            al_cambiar(e)
+
+    campo.on_change = manejador

@@ -2,6 +2,7 @@
 
 import flet as ft
 
+from utilidades.flet_compat import al_seleccionar
 from utilidades.imagenes import foto_bebida
 
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -133,15 +134,42 @@ def abrir_dialogo_personalizacion(
         "Grande": (128, 170),
     }
 
+    # Costo que suma (o resta) cada opción al precio base de la bebida.
+    # El precio base del menú corresponde a Mediano con leche Entera.
+    # Para cambiar un precio basta con modificar estos diccionarios: las
+    # etiquetas del menú y el total se ajustan solos.
+    COSTOS_TAMANO = {
+        "Chico": -5,
+        "Mediano": 0,
+        "Grande": 10,
+    }
+    COSTOS_LECHE = {
+        "Entera": 0,
+        "Deslactosada": 5,
+        "Almendra": 10,
+        "Avena": 10,
+        "Soya": 8,
+        "Sin leche": 0,
+    }
+
+    def _etiqueta_costo(nombre: str, costo: float) -> str:
+        if costo > 0:
+            return f"{nombre} (+${costo:g})"
+        if costo < 0:
+            return f"{nombre} (-${abs(costo):g})"
+        return nombre
+
+    def _opciones(costos: dict) -> list:
+        return [
+            ft.dropdown.Option(key=nombre, text=_etiqueta_costo(nombre, costo))
+            for nombre, costo in costos.items()
+        ]
+
     dd_tamano = ft.Dropdown(
         label="Tamaño",
-        value=prep_inicial.get("tamano", "Mediano"),
+        value=prep_inicial.get("tamano") or "Mediano",
         expand=1,
-        options=[
-            ft.dropdown.Option("Chico"),
-            ft.dropdown.Option("Mediano"),
-            ft.dropdown.Option("Grande"),
-        ],
+        options=_opciones(COSTOS_TAMANO),
     )
 
     boba_inicial = int(prep_inicial.get("boba", prep_inicial.get("azucar", 40)))
@@ -151,16 +179,9 @@ def abrir_dialogo_personalizacion(
 
     dd_leche = ft.Dropdown(
         label="Tipo de leche",
-        value=prep_inicial.get("leche", "Entera"),
+        value=prep_inicial.get("leche") or "Entera",
         expand=1,
-        options=[
-            ft.dropdown.Option("Entera"),
-            ft.dropdown.Option("Deslactosada"),
-            ft.dropdown.Option("Almendra"),
-            ft.dropdown.Option("Avena"),
-            ft.dropdown.Option("Soya"),
-            ft.dropdown.Option("Sin leche"),
-        ],
+        options=_opciones(COSTOS_LECHE),
     )
 
     extras_info = [
@@ -419,15 +440,16 @@ def abrir_dialogo_personalizacion(
 
     def calcular_extra():
         total_extra = 0.0
-        if dd_tamano.value == "Grande":
-            total_extra += 10
-        elif dd_tamano.value == "Chico":
-            total_extra -= 5
+        total_extra += float(COSTOS_TAMANO.get(dd_tamano.value, 0))
+        total_extra += float(COSTOS_LECHE.get(dd_leche.value, 0))
 
         for nombre_extra, precio_extra in extras_info:
             if estados_extras[nombre_extra]["activo"]:
                 total_extra += float(precio_extra)
         return total_extra
+
+    # Se vuelve True cuando el diálogo ya está en la página.
+    estado_dialogo = {"abierto": False}
 
     def refrescar_preview(e=None):
         hielo_val = int(sl_hielo.value or 0)
@@ -524,6 +546,14 @@ def abrir_dialogo_personalizacion(
         lbl_boba.value = f"Boba: {boba_val}%"
         lbl_hielo.value = f"Hielo: {hielo_val}%"
 
+        # La primera vez se llama antes de abrir el diálogo, para dejar
+        # listo el vaso. En ese momento los controles todavía no están en
+        # la página y update() lanza "Control must be added to the page
+        # first" (pasaba al editar una bebida con extras, porque su precio
+        # ya es distinto del precio base). Abrir el diálogo los pinta.
+        if not estado_dialogo["abierto"]:
+            return
+
         # Pequeño "rebote" en el precio cuando cambia, para que se note.
         if precio_cambio:
             badge_precio.scale = 1.12
@@ -534,8 +564,11 @@ def abrir_dialogo_personalizacion(
             badge_precio.scale = 1
             badge_precio.update()
 
-    dd_tamano.on_change = refrescar_preview
-    dd_leche.on_change = refrescar_preview
+    # Flet 0.80 avisa el cambio de un Dropdown con on_select; con
+    # on_change el precio y el vaso no se actualizaban al cambiar el
+    # tamaño o la leche.
+    al_seleccionar(dd_tamano, refrescar_preview)
+    al_seleccionar(dd_leche, refrescar_preview)
     sl_boba.on_change = refrescar_preview
     sl_hielo.on_change = refrescar_preview
 
@@ -648,3 +681,4 @@ def abrir_dialogo_personalizacion(
 
     refrescar_preview()
     abrir_dialogo(page, dlg)
+    estado_dialogo["abierto"] = True

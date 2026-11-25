@@ -28,6 +28,84 @@ def chip(texto: str, color_bg: str = "#F7E8FF", color_txt: str = "#6D28D9"):
     )
 
 
+# ------------------------------------------------------------
+# Estatus del pedido, como lo ve el cliente
+# ------------------------------------------------------------
+# Se decide por el número de estatus (EstatusPedido_IdEstatusPedido) y no
+# por el texto guardado: el texto lo escribe cada pantalla a su manera y
+# con eso el cliente veía "Listo para entrega" en pedidos ya entregados.
+#
+#   3 Pedido Realizado -> el cliente lo hizo y caja todavía no lo atiende
+#   2 En preparación   -> caja lo cobró y se está preparando
+#   4 Entregado        -> el empleado ya le dio la bebida
+ESTATUS_PAGADO = 1
+ESTATUS_EN_PREPARACION = 2
+ESTATUS_PEDIDO_REALIZADO = 3
+ESTATUS_ENTREGADO = 4
+ESTATUS_CANCELADO = 5
+ESTATUS_NO_RECOGIDO = 6
+
+ETIQUETAS_ESTATUS = {
+    ESTATUS_PAGADO: "Pagado",
+    ESTATUS_EN_PREPARACION: "En preparación",
+    ESTATUS_PEDIDO_REALIZADO: "Esperando a caja",
+    ESTATUS_ENTREGADO: "Pedido entregado",
+    ESTATUS_CANCELADO: "Cancelado",
+    ESTATUS_NO_RECOGIDO: "No recogido",
+}
+
+MENSAJES_ESTATUS = {
+    ESTATUS_PAGADO: "⏱️ Tiempo estimado: 8-10 minutos.",
+    ESTATUS_EN_PREPARACION: "⏱️ Tiempo estimado: 8-10 minutos.",
+    ESTATUS_PEDIDO_REALIZADO: "⏳ Tu pedido llegó a caja. En cuanto lo confirmen empezamos a prepararlo.",
+    ESTATUS_ENTREGADO: "🎉 Pedido entregado. ¡Gracias por tu compra!",
+    ESTATUS_CANCELADO: "🚫 Este pedido fue cancelado.",
+    ESTATUS_NO_RECOGIDO: "⚠️ No pasaste por este pedido. Págalo en el local para volver a pedir.",
+}
+
+# Colores del chip: (fondo, texto)
+COLORES_ESTATUS = {
+    ESTATUS_PEDIDO_REALIZADO: ("#FEF3C7", "#92400E"),
+    ESTATUS_EN_PREPARACION: ("#F7E8FF", "#6D28D9"),
+    ESTATUS_PAGADO: ("#F7E8FF", "#6D28D9"),
+    ESTATUS_ENTREGADO: ("#DCFCE7", "#166534"),
+    ESTATUS_CANCELADO: ("#F3F4F6", "#4B5563"),
+    ESTATUS_NO_RECOGIDO: ("#FEE2E2", "#991B1B"),
+}
+
+
+def id_estatus(row: dict) -> int:
+    try:
+        return int(row.get("EstatusPedido_IdEstatusPedido") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pagado_en_mostrador(row: dict) -> bool:
+    # Un pedido "No recogido" que se salda en el mostrador también queda
+    # con estatus 4, pero no se entregó ninguna bebida.
+    return "mostrador" in str(row.get("Estatus") or "").lower()
+
+
+def texto_estatus(row: dict) -> str:
+    """Nombre del estatus que ve el cliente."""
+    if id_estatus(row) == ESTATUS_ENTREGADO and _pagado_en_mostrador(row):
+        return "Pagado en mostrador"
+    return ETIQUETAS_ESTATUS.get(id_estatus(row)) or str(row.get("Estatus") or "Sin estatus")
+
+
+def mensaje_estatus(row: dict) -> str:
+    """Frase que explica al cliente qué sigue con su pedido."""
+    if id_estatus(row) == ESTATUS_ENTREGADO and _pagado_en_mostrador(row):
+        return "💳 Pago registrado en el local. Ya puedes volver a pedir."
+    return MENSAJES_ESTATUS.get(id_estatus(row)) or _tiempo_estimado(row.get("Estatus"))
+
+
+def chip_estatus(row: dict):
+    fondo, texto = COLORES_ESTATUS.get(id_estatus(row), ("#F7E8FF", "#6D28D9"))
+    return chip(texto_estatus(row), fondo, texto)
+
+
 def section_card(content):
     """Contenedor blanco estándar para secciones del menú."""
     return ft.Container(
@@ -146,7 +224,7 @@ def tarjeta_historial(row: dict, abrir_detalle, formatear_dinero):
                             weight=ft.FontWeight.BOLD,
                             expand=True,
                         ),
-                        chip(str(row.get("Estatus") or "Sin estatus")),
+                        chip_estatus(row),
                     ],
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                 ),
@@ -205,7 +283,7 @@ def tarjeta_estado(row: dict, formatear_dinero, puede_cancelar: bool = False, ca
                     weight=ft.FontWeight.BOLD,
                     expand=True,
                 ),
-                chip(str(row.get("Estatus") or "Sin estatus")),
+                chip_estatus(row),
             ],
             alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
         ),
@@ -215,7 +293,7 @@ def tarjeta_estado(row: dict, formatear_dinero, puede_cancelar: bool = False, ca
             color="#666666",
         ),
         ft.Text(
-            _tiempo_estimado(row.get("Estatus")),
+            mensaje_estatus(row),
             size=12,
             color="#7C3AED",
             weight=ft.FontWeight.BOLD,
