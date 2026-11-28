@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 from collections import defaultdict
 from datetime import datetime, date, timedelta
 from io import BytesIO
@@ -12,7 +13,8 @@ from componentes.appbar_admin import build_admin_appbar
 from componentes.layout_sidebar import es_pantalla_angosta
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_reporte import Celda, ColumnaReporte, tabla_reporte
-from utilidades.flet_compat import set_error
+from utilidades.flet_compat import abrir_dialogo, cerrar_dialogo, set_error
+from utilidades.tickets import guardar_pdf
 
 # ============================================================
 # Compatibilidad Flet
@@ -48,11 +50,17 @@ ICON_TOP = _icon("EMOJI_EVENTS", "STAR", "TRENDING_UP")
 ICON_FORECAST = _icon("INVENTORY", "INVENTORY_2", "LOCAL_SHIPPING")
 ICON_STOCK = _icon("WARNING_AMBER", "WARNING", "REPORT")
 ICON_DETAIL = _icon("RECEIPT_LONG", "LIST_ALT", "LIST")
+ICON_CALENDAR = _icon("CALENDAR_MONTH", "CALENDAR_TODAY", "EVENT")
+ICON_PDF = _icon("PICTURE_AS_PDF", "OPEN_IN_NEW", "DOWNLOAD")
 
 # Colores de estado (texto, fondo de la etiqueta)
 ESTADO_CRITICO = ("#B91C1C", "#FEE2E2")
 ESTADO_BAJO = ("#B45309", "#FEF3C7")
 ESTADO_CORRECTO = ("#15803D", "#DCFCE7")
+
+# Mismo límite que usa vista_inventario (STOCK_BAJO): 5 o menos es stock
+# bajo, así el reporte y el inventario marcan los mismos productos.
+STOCK_BAJO = 5
 
 # ============================================================
 # PDF opcional
@@ -118,17 +126,57 @@ def parse_hour(value):
     return None
 
 
+def _norm(text) -> str:
+    """Minúsculas, sin acentos y sin espacios repetidos, para comparar nombres."""
+    text = unicodedata.normalize("NFKD", str(text or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", text).strip().lower()
+
+
+def fmt_qty(value) -> str:
+    """Cantidad sin decimales si es entera (3) y con decimales si no (2.5)."""
+    num = safe_float(value)
+    return str(int(num)) if num == int(num) else f"{num:,.2f}".rstrip("0").rstrip(".")
+
+
 def _clean_product_name(text: str) -> str:
+    """Saca solo el nombre de la bebida de una línea del pedido.
+
+    El menú guarda cada línea como "Taro (x2) [Tamaño: Mediano | Boba: 40% | ...]".
+    Antes se partía el texto por "|" y se tomaba la segunda parte, así que
+    en el reporte salían "Boba: 40%" o "Azúcar: 70%" (la personalización) y,
+    en los recibos de cobro ("Pedido #12 | Pedro Perez | ..."), el nombre del
+    cliente como si fuera un producto.
+    """
     text = str(text or "").strip()
-    if "|" in text:
-        parts = text.split("|", 2)
-        if len(parts) >= 2:
-            text = parts[1]
-    text = re.sub(r"\s+", " ", text)
-    text = re.sub(r"\s*\(x\s*\d+\).*", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"\s*\(\d+\).*", "", text).strip()
-    text = text.split("[")[0].strip()
+    m = re.match(r"^Pedido\s*#\s*\d+\s*\|[^|]*\|\s*(.*)$", text, flags=re.IGNORECASE)
+    if m:
+        text = m.group(1)
+    text = text.split("[")[0]
+    text = re.split(r"\(\s*x?\s*\d+\s*\)", text, maxsplit=1, flags=re.IGNORECASE)[0]
+    text = re.sub(r"\s+", " ", text).strip().rstrip(".").strip()
     return text or "Sin detalle"
+
+
+def _match_known(name: str, known_products: list[str] | None):
+    """Devuelve el nombre del catálogo que corresponde a name.
+
+    Acepta nombres recortados: las ventas guardan el detalle cortado a 45
+    caracteres ("Chocolate Bo..."), así que también se busca por prefijo.
+    """
+    if not known_products:
+        return name
+    key = _norm(name)
+    if not key:
+        return name
+    for prod in known_products:
+        if _norm(prod) == key:
+            return prod
+    if len(key) >= 4:
+        for prod in known_products:
+            if _norm(prod).startswith(key):
+                return prod
+    return name
 
 
 def parse_product_lines(detail: str, known_products: list[str] | None = None):
@@ -136,22 +184,23 @@ def parse_product_lines(detail: str, known_products: list[str] | None = None):
     if not detail:
         return [{"name": "Sin detalle", "qty": 1}]
 
+    # Recibo de cobro: "Pedido #12 | Cliente | <detalle del pedido>"
+    m = re.match(r"^Pedido\s*#\s*\d+\s*\|[^|]*\|\s*(.*)$", detail, flags=re.IGNORECASE)
+    if m:
+        detail = m.group(1).strip() or detail
+
     parts = [p.strip() for p in detail.split(" / ") if p.strip()] or [detail]
     result = []
     for part in parts:
         qty = 1
-        m = re.search(r"\(x\s*(\d+)\)", part, re.IGNORECASE) or re.search(r"\((\d+)\)", part)
-        if m:
-            qty = max(1, safe_int(m.group(1), 1))
+        # La cantidad se busca solo en el nombre, no dentro de los corchetes
+        # de la personalización.
+        cabeza = part.split("[")[0]
+        m_qty = re.search(r"\(x\s*(\d+)\)", cabeza, re.IGNORECASE) or re.search(r"\((\d+)\)", cabeza)
+        if m_qty:
+            qty = max(1, safe_int(m_qty.group(1), 1))
 
-        name = _clean_product_name(part)
-        if known_products:
-            lower = part.lower()
-            for prod in known_products:
-                p = str(prod or "")
-                if p and (p.lower() in lower or lower.startswith(p.lower()[:12])):
-                    name = p
-                    break
+        name = _match_known(_clean_product_name(part), known_products)
         result.append({"name": name, "qty": qty})
     return result
 
@@ -265,12 +314,18 @@ def fetch_employee_options():
 
 
 def fetch_known_products():
+    """Nombres de las bebidas del menú.
+
+    Lo que se vende son bebidas (tabla bebidas); la tabla productos es el
+    inventario de insumos. Antes se comparaba contra productos y por eso
+    "Leche" o "Azúcar" podían aparecer como lo más vendido.
+    """
     conn = None
     cur = None
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT Nombre FROM productos ORDER BY Nombre")
+        cur.execute("SELECT Nombre FROM bebidas ORDER BY Nombre")
         return [r.get("Nombre") for r in (cur.fetchall() or []) if r.get("Nombre")]
     except Exception:
         return []
@@ -293,7 +348,13 @@ def fetch_sales_report(start_date: str, end_date: str, employee_id: str = "", pr
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
 
-        if "generarpedido" in tables:
+        # Reporte de un solo empleado: solo cuentan los cobros que hizo él
+        # (ventas ligadas a su corte de caja). Los pedidos y recibos no
+        # guardan qué empleado los atendió, así que antes se sumaban a
+        # cualquier empleado y el reporte individual salía igual al general.
+        por_empleado = bool(str(employee_id or "").strip())
+
+        if "generarpedido" in tables and not por_empleado:
             cur.execute(
                 """
                 SELECT
@@ -313,6 +374,27 @@ def fetch_sales_report(start_date: str, end_date: str, employee_id: str = "", pr
                 (start_date, end_date),
             )
             rows.extend(cur.fetchall() or [])
+
+        # Cada cobro en Caja Chica copia el pedido del cliente a ventas (con
+        # el detalle recortado a 45 caracteres) y a recibospedidos ("Pedido
+        # #N | Cliente | ..."). Antes las tres copias se sumaban: el mismo
+        # pedido contaba hasta tres veces en ventas, ingresos y más vendidos.
+        pedidos_existentes = []
+        if "generarpedido" in tables and not por_empleado:
+            cur.execute("SELECT Producto, COALESCE(Total, 0) AS Total FROM generarpedido")
+            pedidos_existentes = [
+                (_norm(r.get("Producto")), round(safe_float(r.get("Total")), 2))
+                for r in (cur.fetchall() or [])
+            ]
+
+        def _venta_de_pedido(detalle, total) -> bool:
+            texto = _norm(detalle)
+            if texto.endswith("..."):
+                texto = texto[:-3].strip()
+            if not texto:
+                return False
+            total = round(safe_float(total), 2)
+            return any(t == total and prod.startswith(texto) for prod, t in pedidos_existentes)
 
         if "ventas" in tables:
             cc_cols = columns.get("cortecaja", set())
@@ -346,10 +428,13 @@ def fetch_sales_report(start_date: str, end_date: str, employee_id: str = "", pr
                 """,
                 tuple(params),
             )
-            rows.extend(cur.fetchall() or [])
+            rows.extend(
+                r for r in (cur.fetchall() or [])
+                if not _venta_de_pedido(r.get("Detalle"), r.get("Total"))
+            )
 
         # recibospedidos es respaldo. Solo se usa para registros que no estén en generarpedido.
-        if "recibospedidos" in tables:
+        if "recibospedidos" in tables and not por_empleado:
             cur.execute(
                 """
                 SELECT
@@ -364,6 +449,7 @@ def fetch_sales_report(start_date: str, end_date: str, employee_id: str = "", pr
                     rp.Usuario AS Persona
                 FROM recibospedidos rp
                 WHERE rp.Fecha BETWEEN %s AND %s
+                  AND COALESCE(rp.Producto, '') NOT LIKE 'Pedido #%%'
                   AND NOT EXISTS (
                       SELECT 1 FROM generarpedido gp
                       WHERE gp.FechaPedido = rp.Fecha
@@ -417,21 +503,28 @@ def fetch_inventory_report(start_date: str, end_date: str):
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
 
-        if "productosstock" in tables:
+        # Misma consulta que la pantalla de Inventario (productos + su
+        # stock). Antes se partía de productosstock, así que faltaban los
+        # productos sin entradas y sobraban registros de stock de productos
+        # ya borrados o renombrados: el reporte no coincidía con Inventario.
+        if "productos" in tables:
+            join_stock = (
+                "LEFT JOIN productosstock ps ON TRIM(LOWER(ps.Nombre)) = TRIM(LOWER(p.Nombre))"
+                if "productosstock" in tables else ""
+            )
+            cantidad = "COALESCE(ps.Cantidad, 0)" if join_stock else "0"
             cur.execute(
-                """
+                f"""
                 SELECT
-                    ps.IdProductosStock,
-                    COALESCE(ps.Producto_IdProductos, p.IdProductos) AS IdProducto,
-                    ps.Nombre,
-                    ps.Descripcion,
-                    COALESCE(ps.Cantidad, 0) AS Cantidad,
+                    p.IdProductos AS IdProducto,
+                    p.Nombre,
+                    p.Descripcion,
+                    p.UnidadMedida,
+                    {cantidad} AS Cantidad,
                     COALESCE(p.Precio, 0) AS Precio
-                FROM productosstock ps
-                LEFT JOIN productos p
-                    ON p.IdProductos = ps.Producto_IdProductos
-                    OR TRIM(LOWER(p.Nombre)) = TRIM(LOWER(ps.Nombre))
-                ORDER BY ps.Cantidad ASC, ps.Nombre ASC
+                FROM productos p
+                {join_stock}
+                ORDER BY Cantidad ASC, p.Nombre ASC
                 """
             )
             data["stock"] = cur.fetchall() or []
@@ -479,7 +572,7 @@ def build_metrics(rows, inventory):
     total_sales = len(rows)
     gross_income = sum(safe_float(r.get("Total")) for r in rows)
     avg_ticket = gross_income / total_sales if total_sales else 0.0
-    stock_low = sum(1 for s in inventory.get("stock", []) if safe_float(s.get("Cantidad")) <= 5)
+    stock_low = sum(1 for s in inventory.get("stock", []) if safe_float(s.get("Cantidad")) <= STOCK_BAJO)
     entradas_total = sum(safe_float(e.get("Cantidad")) for e in inventory.get("entradas", []))
     salidas_total = sum(safe_float(s.get("Cantidad")) for s in inventory.get("salidas", []))
     return {
@@ -518,28 +611,58 @@ def build_ai_insights(rows, inventory, start_date: str, end_date: str):
         day_totals[str(row.get("Fecha") or "")] += total
 
     top_products = sorted(product_stats.items(), key=lambda x: (x[1]["units"], x[1]["income"]), reverse=True)
-    stock_map = {str(s.get("Nombre") or "").strip().lower(): safe_float(s.get("Cantidad")) for s in inventory.get("stock", [])}
+
+    # Reabastecimiento: se calcula sobre los productos del inventario (los
+    # mismos que se ven en Inventario) y sus salidas del periodo. Antes se
+    # cruzaban las bebidas vendidas contra el stock de insumos, así que
+    # recomendaba reabastecer cosas como "Azúcar: 70%" que no existen.
+    salidas_por_id = defaultdict(float)
+    salidas_por_nombre = defaultdict(float)
+    for sal in inventory.get("salidas", []):
+        texto = str(sal.get("Descripcion") or "")
+        cantidad = safe_float(sal.get("Cantidad"))
+        partes = texto.split("|", 2)
+        if len(partes) >= 2 and partes[0].strip().isdigit():
+            salidas_por_id[int(partes[0].strip())] += cantidad
+        salidas_por_nombre[_norm(_mov_product_name(texto))] += cantidad
 
     forecast = []
-    for name, data in top_products[:10]:
-        weekly_units = math.ceil(data["units"] / period_days * 7)
-        current_stock = stock_map.get(str(name).lower(), 0.0)
-        suggested = max(0, weekly_units - int(current_stock))
-        forecast.append({"name": name, "weekly_units": weekly_units, "current_stock": current_stock, "suggested_restock": suggested})
+    for item in inventory.get("stock", []):
+        name = str(item.get("Nombre") or "Sin nombre")
+        id_prod = safe_int(item.get("IdProducto"), -1)
+        consumo = salidas_por_id.get(id_prod) or salidas_por_nombre.get(_norm(name), 0.0)
+        weekly_units = math.ceil(consumo / period_days * 7) if consumo > 0 else 0
+        current_stock = safe_float(item.get("Cantidad"))
+        # Lo mínimo es salir de "stock bajo" (más de STOCK_BAJO) o cubrir
+        # la semana, lo que sea mayor.
+        objetivo = max(weekly_units, STOCK_BAJO + 1)
+        suggested = max(0, math.ceil(objetivo - current_stock))
+        forecast.append({
+            "name": name,
+            "unit": str(item.get("UnidadMedida") or "").strip(),
+            "weekly_units": weekly_units,
+            "current_stock": current_stock,
+            "suggested_restock": suggested,
+        })
+    forecast.sort(key=lambda f: (-f["suggested_restock"], f["current_stock"], _norm(f["name"])))
 
     peak_hour = max(hour_stats.items(), key=lambda item: item[1])[0] if hour_stats else None
     peak_label = f"{peak_hour:02d}:00 - {peak_hour:02d}:59" if peak_hour is not None else "Sin datos"
 
-    stock_low_items = [s for s in inventory.get("stock", []) if safe_float(s.get("Cantidad")) <= 5]
+    stock_low_items = [s for s in inventory.get("stock", []) if safe_float(s.get("Cantidad")) <= STOCK_BAJO]
     recommendations = []
     if top_products:
         best_name, best_data = top_products[0]
-        recommendations.append(f"El producto con mayor demanda es {best_name}, con {best_data['units']} unidades vendidas en el periodo.")
+        recommendations.append(f"La bebida más vendida es {best_name}, con {best_data['units']} unidades vendidas en el periodo.")
     if forecast:
         needs = [f for f in forecast if f["suggested_restock"] > 0]
         if needs:
             first = needs[0]
-            recommendations.append(f"Reabastece {first['name']}: demanda estimada de {first['weekly_units']} unidades para 7 días y stock actual de {int(first['current_stock'])}.")
+            unidad = f" {first['unit']}" if first.get("unit") else ""
+            recommendations.append(
+                f"Reabastece {first['name']}: tiene {fmt_qty(first['current_stock'])}{unidad} en inventario; "
+                f"se sugiere surtir {first['suggested_restock']}{unidad}."
+            )
     if peak_hour is not None:
         recommendations.append(f"La hora con mayor movimiento fue {peak_label}; prepara inventario y personal antes de ese horario.")
     if stock_low_items:
@@ -560,11 +683,18 @@ def create_pdf_bytes(nombre, filters, rows, inventory, metrics, insights):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, rightMargin=24, leftMargin=24, topMargin=24, bottomMargin=24)
     styles = getSampleStyleSheet()
+    empleado = filters.get("employee_label") if filters.get("employee_id") else ""
+    titulo = f"Reporte de ventas de {empleado}" if empleado else "Corallie Bubble - Reporte inteligente"
     elements = [
-        Paragraph("Corallie Bubble - Reporte inteligente", styles["Title"]),
+        Paragraph(titulo, styles["Title"]),
         Spacer(1, 8),
         Paragraph(f"Generado por: {nombre}", styles["Normal"]),
         Paragraph(f"Rango: {filters.get('start_date')} a {filters.get('end_date')}", styles["Normal"]),
+        Paragraph(
+            f"Empleado: {empleado} (solo los cobros que registró en caja)" if empleado
+            else "Empleado: todos",
+            styles["Normal"],
+        ),
         Spacer(1, 10),
         Paragraph("Resumen", styles["Heading2"]),
     ]
@@ -578,7 +708,7 @@ def create_pdf_bytes(nombre, filters, rows, inventory, metrics, insights):
     ]
     t = Table(resumen, colWidths=[160, 140])
     t.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.5, colors.grey), ("BACKGROUND", (0, 0), (-1, -1), colors.whitesmoke)]))
-    elements += [t, Spacer(1, 12), Paragraph("Análisis IA", styles["Heading2"]), Paragraph(insights.get("summary", ""), styles["Normal"])]
+    elements += [t, Spacer(1, 12), Paragraph("Análisis inteligente", styles["Heading2"]), Paragraph(insights.get("summary", ""), styles["Normal"])]
     for rec in insights.get("recommendations", []):
         elements.append(Paragraph(f"• {rec}", styles["Normal"]))
     elements += [Spacer(1, 12), Paragraph("Detalle consolidado", styles["Heading2"])]
@@ -660,9 +790,63 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     start_default = min_date.isoformat() if hasattr(min_date, "isoformat") else (date.today() - timedelta(days=30)).isoformat()
     end_default = max_date.isoformat() if hasattr(max_date, "isoformat") else date.today().isoformat()
 
-    fecha_inicio = ft.TextField(label="Fecha inicio", value=start_default, expand=True, border_radius=12, hint_text="YYYY-MM-DD")
-    fecha_fin = ft.TextField(label="Fecha fin", value=end_default, expand=True, border_radius=12, hint_text="YYYY-MM-DD")
-    dd_empleado = ft.Dropdown(label="Empleado", expand=True, border_radius=12, options=fetch_employee_options(), value="")
+    # Las fechas ya no se escriben a mano: al tocarlas se abre un
+    # calendario y se elige el día.
+    fecha_inicio = ft.TextField(
+        label="Fecha inicio", value=start_default, expand=True, border_radius=12,
+        read_only=True, suffix_icon=ICON_CALENDAR,
+    )
+    fecha_fin = ft.TextField(
+        label="Fecha fin", value=end_default, expand=True, border_radius=12,
+        read_only=True, suffix_icon=ICON_CALENDAR,
+    )
+    dd_empleado = ft.Dropdown(
+        label="Empleado", expand=True, border_radius=12,
+        options=fetch_employee_options(), value="",
+        tooltip="Elige un empleado para ver y exportar solo sus ventas",
+    )
+
+    def _fecha_de(texto):
+        try:
+            return datetime.strptime(str(texto or "").strip(), "%Y-%m-%d")
+        except Exception:
+            return datetime.now()
+
+    def abrir_calendario(campo: ft.TextField):
+        def _abrir(e=None):
+            def elegir(ev):
+                valor = ev.control.value
+                if valor is None:
+                    return
+                # Flet puede mandar la fecha en UTC: se pasa a la hora
+                # local antes de tomar el día para no recorrerlo uno atrás.
+                if getattr(valor, "tzinfo", None) is not None:
+                    valor = valor.astimezone()
+                campo.value = valor.date().isoformat()
+                set_error(campo, None)
+                try:
+                    campo.update()
+                except Exception:
+                    page.update()
+
+            picker = ft.DatePicker(
+                value=_fecha_de(campo.value),
+                first_date=datetime(2024, 1, 1),
+                last_date=datetime.now() + timedelta(days=1),
+                help_text=f"Elige la {campo.label.lower()}",
+                cancel_text="Cancelar",
+                confirm_text="Aceptar",
+                on_change=elegir,
+            )
+            try:
+                picker.locale = ft.Locale("es", "MX")  # meses y días en español
+            except Exception:
+                pass
+            abrir_dialogo(page, picker)
+        return _abrir
+
+    fecha_inicio.on_click = abrir_calendario(fecha_inicio)
+    fecha_fin.on_click = abrir_calendario(fecha_fin)
     txt_producto = ft.TextField(label="Producto contiene", expand=True, border_radius=12, prefix_icon=ICON_SEARCH)
     txt_total_min = ft.TextField(label="Total mín." if es_movil else "Total mínimo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
     txt_total_max = ft.TextField(label="Total máx." if es_movil else "Total máximo", expand=True, border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
@@ -801,7 +985,7 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             page,
             [
                 ColumnaReporte("#", flex=1, alinear="der", en_movil=False),
-                ColumnaReporte("Producto", flex=6, principal=True),
+                ColumnaReporte("Bebida", flex=6, principal=True),
                 ColumnaReporte("Órdenes", flex=2, alinear="der"),
                 ColumnaReporte("Unidades", flex=2, alinear="der"),
                 ColumnaReporte("Ingreso", flex=3, alinear="der", destacada=True),
@@ -827,14 +1011,14 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             forecast_filas.append([
                 Celda(compact_text(item["name"], 40), negrita=True),
                 str(item["weekly_units"]),
-                str(int(item["current_stock"])),
+                fmt_qty(item["current_stock"]),
                 Celda(f"+{need}" if need > 0 else "Suficiente", color=color, fondo=fondo),
             ])
         forecast_box.controls = [tabla_reporte(
             page,
             [
                 ColumnaReporte("Producto", flex=5, principal=True),
-                ColumnaReporte("Demanda 7 días", flex=2, alinear="der"),
+                ColumnaReporte("Salidas 7 días", flex=2, alinear="der"),
                 ColumnaReporte("Stock", flex=2, alinear="der"),
                 ColumnaReporte("Reabastecer", flex=2, alinear="der", destacada=True),
             ],
@@ -847,13 +1031,13 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             qty = safe_float(item.get("Cantidad"))
             if qty <= 0:
                 estado, (color, fondo) = "Crítico", ESTADO_CRITICO
-            elif qty <= 5:
+            elif qty <= STOCK_BAJO:
                 estado, (color, fondo) = "Bajo", ESTADO_BAJO
             else:
                 estado, (color, fondo) = "Correcto", ESTADO_CORRECTO
             stock_filas.append([
                 Celda(compact_text(item.get("Nombre"), 40), negrita=True),
-                Celda(str(int(qty)), negrita=True, color=color),
+                Celda(fmt_qty(qty), negrita=True, color=color),
                 Celda(estado, color=color, fondo=fondo),
             ])
         stock_box.controls = [tabla_reporte(
@@ -930,7 +1114,13 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
                 },
             })
             pintar(rows, inventory, metrics, insights)
-            txt_estado.value = f"Reporte generado: {len(rows)} ventas/pedidos | {len(inventory.get('stock', []))} productos en stock."
+            if dd_empleado.value:
+                txt_estado.value = (
+                    f"Reporte de {employee_label}: {len(rows)} cobros del "
+                    f"{start_obj.isoformat()} al {end_obj.isoformat()}."
+                )
+            else:
+                txt_estado.value = f"Reporte generado: {len(rows)} ventas/pedidos | {len(inventory.get('stock', []))} productos en stock."
             if actualizar:
                 page.update()
                 show_snack("Reporte inteligente generado correctamente.")
@@ -955,22 +1145,47 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             show_snack("Primero genera un reporte con datos.", ok=False)
             return
         try:
-            pdf_bytes = create_pdf_bytes(nombre, last_report["filters"], last_report["rows"], last_report["inventory"], last_report["metrics"], last_report["insights"])
-            import os
-            filename = f"reporte_corallie_ia_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-            path = os.path.join(os.path.expanduser("~"), "Downloads", filename)
+            filtros = last_report["filters"]
+            pdf_bytes = create_pdf_bytes(nombre, filtros, last_report["rows"], last_report["inventory"], last_report["metrics"], last_report["insights"])
+            sufijo = filtros.get("employee_label") if filtros.get("employee_id") else "general"
+            base = f"reporte_{sufijo}_{filtros.get('start_date')}_{filtros.get('end_date')}"
+
+            # Antes el PDF se guardaba en Descargas de la PC donde corre el
+            # servidor: desde el celular nunca se veía. Ahora se publica en
+            # assets/_tickets y se abre con un botón (el navegador del
+            # celular solo abre otra pestaña si es por un toque directo).
+            en_web = bool(getattr(page, "web", True))
+            archivo = guardar_pdf(pdf_bytes, base, en_web=en_web)
+            if not archivo.get("url"):
+                show_snack(f"PDF guardado en: {archivo.get('ruta')}")
+                return
+
+            btn_abrir = ft.ElevatedButton("Abrir PDF", icon=ICON_PDF, bgcolor="#7C3AED", color="white")
+            destino = getattr(getattr(ft, "UrlTarget", None), "BLANK", "_blank")
+            url_cls = getattr(ft, "Url", None)
             try:
-                with open(path, "wb") as f:
-                    f.write(pdf_bytes)
-                show_snack(f"PDF guardado en Descargas: {filename}")
+                btn_abrir.url = url_cls(archivo["url"], target=destino) if url_cls else archivo["url"]
             except Exception:
-                with open(filename, "wb") as f:
-                    f.write(pdf_bytes)
-                show_snack(f"PDF generado: {filename}")
+                btn_abrir.url = archivo["url"]
+
+            quien = filtros.get("employee_label") if filtros.get("employee_id") else "todos los empleados"
+            dlg = ft.AlertDialog(
+                title=ft.Text("PDF listo"),
+                content=ft.Text(
+                    f"Reporte de {quien} del {filtros.get('start_date')} al {filtros.get('end_date')}. "
+                    "Ábrelo para descargarlo, imprimirlo o compartirlo."
+                ),
+            )
+            dlg.actions = [
+                ft.TextButton("Cerrar", on_click=lambda ev: cerrar_dialogo(page, dlg)),
+                btn_abrir,
+            ]
+            dlg.actions_alignment = ft.MainAxisAlignment.END
+            abrir_dialogo(page, dlg)
         except Exception as ex:
             show_snack(f"No se pudo generar el PDF: {ex}", ok=False)
 
-    btn_generar = ft.ElevatedButton("Generar reporte IA", icon=ICON_AI, bgcolor="#C86DD7", color="white", on_click=generar_reporte)
+    btn_generar = ft.ElevatedButton("Generar reporte inteligente", icon=ICON_AI, bgcolor="#C86DD7", color="white", on_click=generar_reporte)
     btn_limpiar = ft.OutlinedButton("Actualizar / limpiar", icon=ICON_REFRESH, on_click=limpiar_filtros)
     btn_pdf = ft.ElevatedButton("Exportar PDF inteligente", icon=ICON_DOWNLOAD, bgcolor="#7C3AED", color="white", on_click=exportar_pdf)
 
@@ -978,8 +1193,8 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     # Pestañas para mostrar/ocultar SOLO las tablas
     # ------------------------------------------------------------
     active_table = {"value": "top"}
-    tables_title = ft.Text("Productos más vendidos", size=18, weight="bold", color="#333333")
-    tables_subtitle = ft.Text("Ranking por unidades e ingresos.", size=12, color="#6B7280")
+    tables_title = ft.Text("Bebidas más vendidas", size=18, weight="bold", color="#333333")
+    tables_subtitle = ft.Text("Ranking de bebidas del menú por unidades e ingresos.", size=12, color="#6B7280")
     tables_body = ft.Container(content=top_box)
     table_buttons = {}
 
@@ -1014,9 +1229,9 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
         active_table["value"] = key
 
         config = {
-            "top": ("Productos más vendidos", "Ranking por unidades e ingresos.", top_box),
-            "forecast": ("Pronóstico de reabastecimiento", "Estimación para los próximos 7 días comparada contra stock actual.", forecast_box),
-            "stock": ("Stock crítico", "Productos con existencia baja o agotada.", stock_box),
+            "top": ("Bebidas más vendidas", "Ranking de bebidas del menú por unidades e ingresos.", top_box),
+            "forecast": ("Pronóstico de reabastecimiento", "Productos del inventario: salidas estimadas para 7 días contra el stock actual.", forecast_box),
+            "stock": ("Stock del inventario", "Los mismos productos y existencias que la pantalla de Inventario.", stock_box),
             "detail": ("Detalle consolidado", "Datos tomados de generarpedido, ventas/detalleventas y recibospedidos sin duplicar.", sales_box),
         }
 
@@ -1087,17 +1302,25 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
         border=ft.border.all(1, "#F0D7F7"),
         content=ft.Column([
             ft.Text("Filtros del reporte", size=18, weight="bold", color="#333333"),
-            ft.Text("El rango inicial se ajusta a las fechas reales encontradas en ventas, pedidos y recibos.", size=12, color="#6B7280"),
+            ft.Text(
+                "Toca las fechas para elegirlas en el calendario. Elige un empleado para "
+                "generar su reporte por separado (solo los cobros que hizo) y exportar su PDF.",
+                size=12, color="#6B7280",
+            ),
             ft.ResponsiveRow([
                 # En el celular las fechas y los totales van en pares para
                 # que los filtros no ocupen toda la pantalla.
-                ft.Container(content=fecha_inicio, col={"xs": 6, "md": 3, "lg": 2}),
-                ft.Container(content=fecha_fin, col={"xs": 6, "md": 3, "lg": 2}),
-                ft.Container(content=dd_empleado, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
-                ft.Container(content=txt_producto, col={"xs": 12, "sm": 6, "md": 4, "lg": 3}),
-                ft.Container(content=txt_total_min, col={"xs": 6, "md": 3, "lg": 2}),
-                ft.Container(content=txt_total_max, col={"xs": 6, "md": 3, "lg": 2}),
-                ft.Container(content=dd_orden, col={"xs": 12, "sm": 6, "md": 3, "lg": 2}),
+                # Las columnas se calculan con el ancho de la página (no
+                # del panel, que pierde el ancho del sidebar): las fechas
+                # llevan más espacio para que el ícono del calendario no
+                # corte el día.
+                ft.Container(content=fecha_inicio, col={"xs": 6, "lg": 3, "xxl": 2}),
+                ft.Container(content=fecha_fin, col={"xs": 6, "lg": 3, "xxl": 2}),
+                ft.Container(content=dd_empleado, col={"xs": 12, "sm": 6, "lg": 6, "xxl": 4}),
+                ft.Container(content=txt_producto, col={"xs": 12, "sm": 6, "lg": 6, "xxl": 4}),
+                ft.Container(content=txt_total_min, col={"xs": 6, "lg": 3, "xxl": 2}),
+                ft.Container(content=txt_total_max, col={"xs": 6, "lg": 3, "xxl": 2}),
+                ft.Container(content=dd_orden, col={"xs": 12, "sm": 6, "lg": 6, "xxl": 3}),
             ], spacing=10, run_spacing=10),
             ft.Row([btn_generar, btn_limpiar, btn_pdf], wrap=True, spacing=10),
             txt_estado,
@@ -1132,8 +1355,7 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
             spacing=14 if es_movil else 16,
             controls=[
                 ft.Column([
-                    ft.Text("Generar reportes con IA", size=21 if es_movil else 24, weight="bold", color="#C86DD7"),
-                    ft.Text("Analiza ventas, pedidos, insumos, productos vendidos y stock para tomar mejores decisiones.", size=13, color="#6B7280"),
+                    ft.Text("Generar reportes", size=21 if es_movil else 24, weight="bold", color="#C86DD7"),
                 ], spacing=2),
                 filtros,
                 kpis,
@@ -1144,5 +1366,13 @@ def generar_reportes_view(page: ft.Page, nombre: str = "Administrador") -> ft.Vi
     )
 
     layout = admin_layout(page, sidebar, content)
-    appbar = build_admin_appbar(page, "Corallie Bubble - Reportes IA")
-    return ft.View(route="/reportes", controls=[layout], appbar=appbar)
+    appbar = build_admin_appbar(page, "Corallie Bubble - Admin")
+    # padding=0 y el mismo fondo que Inicio: sin esto Flet deja un margen
+    # de 10 px y el sidebar no queda pegado a la barra ni a la orilla.
+    return ft.View(
+        route="/reportes",
+        controls=[layout],
+        appbar=appbar,
+        bgcolor="#F9F6FB",
+        padding=0,
+    )

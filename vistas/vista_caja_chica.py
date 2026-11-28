@@ -5,6 +5,7 @@ from datetime import datetime
 from configuracion.base_datos import get_connection
 from utilidades.flet_compat import al_seleccionar, limpiar_monto, solo_numeros
 from componentes.sidebar import build_sidebar, sidebar_layout
+from utilidades.tickets import guardar_ticket
 from servicios.servicio_menu import (
     ESTATUS_NO_RECOGIDO,
     ESTATUS_PEDIDO_REALIZADO,
@@ -1026,6 +1027,40 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
         recibo_id = recibo.get("recibo_id")
         encabezado = f"Recibo #{recibo_id}" if recibo_id else "Recibo de cobro"
 
+        # Ticket de compra en PDF. Se genera aquí, antes de abrir el
+        # diálogo, para que el botón ya tenga la liga: el navegador del
+        # celular (sobre todo Safari) solo abre una pestaña nueva si es
+        # directamente por el toque del usuario.
+        en_web = bool(getattr(page, "web", True))
+        ticket = None
+        try:
+            ticket = guardar_ticket(recibo, en_web=en_web)
+        except Exception as ex:
+            _show_snack(page, f"El cobro se registró, pero no se pudo generar el ticket: {ex}", ok=False)
+
+        btn_ticket = ft.ElevatedButton(
+            "Ver ticket" if en_web else "Ticket guardado",
+            icon=ICON_PRINT,
+            bgcolor="#7C3AED",
+            color="white",
+            visible=ticket is not None,
+        )
+        if ticket and ticket.get("url"):
+            destino = getattr(getattr(ft, "UrlTarget", None), "BLANK", "_blank")
+            url_cls = getattr(ft, "Url", None)
+            try:
+                # Flet 0.80+: url=ft.Url(...)
+                btn_ticket.url = url_cls(ticket["url"], target=destino) if url_cls else ticket["url"]
+            except Exception:
+                btn_ticket.url = ticket["url"]
+            if url_cls is None:
+                try:
+                    btn_ticket.url_target = destino  # Flet 0.2x
+                except Exception:
+                    pass
+        elif ticket:
+            btn_ticket.on_click = lambda e: _show_snack(page, f"Ticket guardado en: {ticket.get('ruta')}")
+
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Row(
@@ -1070,11 +1105,18 @@ def caja_chica_view(page: ft.Page, nombre: str = "", rol: str = "") -> ft.View:
                             ),
                         ),
                         ft.Text("El recibo fue guardado en la tabla recibospedidos.", size=11, color="#6B7280"),
+                        ft.Text(
+                            "Con «Ver ticket» se abre el PDF para imprimirlo o compartirlo.",
+                            size=11,
+                            color="#6B7280",
+                            visible=ticket is not None and en_web,
+                        ),
                     ],
                 ),
             ),
             actions=[
                 ft.TextButton("Cerrar", on_click=lambda e: _close_dialog(page, dlg)),
+                btn_ticket,
                 ft.ElevatedButton("Aceptar", icon=ICON_CHECK, bgcolor="#C86DD7", color="white", on_click=lambda e: _close_dialog(page, dlg)),
             ],
             actions_alignment=ft.MainAxisAlignment.END,

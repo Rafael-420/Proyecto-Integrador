@@ -1,10 +1,12 @@
 import flet as ft
 from configuracion.base_datos import get_connection
-from configuracion.variables import ROL_CLIENTE
 from servicios import servicio_seguridad as seguridad
 from componentes.appbar_admin import build_admin_appbar
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
+from componentes.encabezado_admin import encabezado_con_busqueda
+from componentes.campo_privado import enmascarar_correo, enmascarar_telefono
+from utilidades.flet_compat import abrir_dialogo, cerrar_dialogo, get_error, icono, set_error, snack
 
 from validaciones.validacion_personas import (
     validar_nombre,
@@ -23,42 +25,33 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
     # ------------------------------------------------------------
     # Helpers UI
     # ------------------------------------------------------------
+    # En Flet 0.80 ya no existen page.open(), page.dialog ni
+    # page.snack_bar: los diálogos de Editar/Eliminar no aparecían y los
+    # avisos tampoco. flet_compat usa page.show_dialog()/pop_dialog() en
+    # 0.80 y page.open()/close() en versiones anteriores.
     def open_dialog(dlg: ft.AlertDialog):
-        try:
-            if hasattr(page, "open"):
-                page.open(dlg)
-            else:
-                page.dialog = dlg
-                dlg.open = True
-                page.update()
-        except Exception:
-            page.dialog = dlg
-            dlg.open = True
-            page.update()
+        abrir_dialogo(page, dlg)
 
     def close_dialog(dlg: ft.AlertDialog):
-        try:
-            dlg.open = False
-            page.update()
-        except Exception:
-            pass
+        cerrar_dialogo(page, dlg)
 
     def show_snack(texto: str, ok: bool = True):
-        sb = ft.SnackBar(
-            content=ft.Text(texto, color="white"),
-            bgcolor="#2E7D32" if ok else "#C62828",
-        )
-        try:
-            if hasattr(page, "open"):
-                page.open(sb)
-            else:
-                page.snack_bar = sb
-                sb.open = True
-                page.update()
-        except Exception:
-            page.snack_bar = sb
-            sb.open = True
-            page.update()
+        snack(page, texto, ok=ok)
+
+    def _repintar(dlg, campos=()):
+        """Muestra los errores de los campos: page.update() no siempre
+        repinta lo que está dentro de un diálogo abierto, así que se
+        repinta cada campo, luego el diálogo y al final la página."""
+        for campo in campos:
+            try:
+                campo.update()
+            except Exception:
+                pass
+        for control in (dlg, page):
+            try:
+                control.update()
+            except Exception:
+                pass
 
     def ir_inicio(e=None):
         if len(page.views) > 1:
@@ -84,12 +77,6 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
     # ------------------------------------------------------------
     # Navegación
     # ------------------------------------------------------------
-    def volver_admin(e=None):
-        if len(page.views) > 1:
-            page.views.pop()
-        page.go("/admin")
-        page.update()
-
     def cerrar_sesion(e=None):
         from vistas.vista_login import LoginView
         page.views.clear()
@@ -158,44 +145,13 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             except Exception:
                 pass
 
-    def db_crear_cliente(nombre, apellido, telefono, correo, usuario, password):
-        conn = None
-        cur = None
-        try:
-            conn = get_connection()
-            conn.start_transaction()
-            cur = conn.cursor()
+    def db_editar_cliente(id_cliente, nombre, apellido, nombre_usuario, password=None):
+        """Actualiza nombre, apellido, usuario y (opcional) contraseña.
 
-            # La contrasena se guarda hasheada con PBKDF2-SHA256 + sal.
-            cur.execute(
-                "INSERT INTO usuario (NombreUsuario, Contraseña, Rol) VALUES (%s, %s, %s)",
-                (usuario, seguridad.hashear(password), ROL_CLIENTE),
-            )
-            id_usuario = cur.lastrowid
-
-            cur.execute(
-                """
-                INSERT INTO cliente (Nombre, Apellido, Telefono, Correo, Usuario_IdUsuario)
-                VALUES (%s, %s, %s, %s, %s)
-                """,
-                (nombre, apellido, telefono, correo, id_usuario),
-            )
-
-            conn.commit()
-        except Exception:
-            if conn:
-                conn.rollback()
-            raise
-        finally:
-            try:
-                if cur:
-                    cur.close()
-                if conn:
-                    conn.close()
-            except Exception:
-                pass
-
-    def db_editar_cliente(id_cliente, nombre, apellido, telefono, correo, nombre_usuario, password=None):
+        El teléfono y el correo NO se modifican desde aquí: son datos
+        privados del cliente y el administrador solo ve los últimos 4
+        caracteres.
+        """
         conn = None
         cur = None
         try:
@@ -235,10 +191,10 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             cur.execute(
                 """
                 UPDATE cliente
-                SET Nombre=%s, Apellido=%s, Telefono=%s, Correo=%s
+                SET Nombre=%s, Apellido=%s
                 WHERE IdCliente=%s
                 """,
-                (nombre, apellido, telefono, correo, int(id_cliente)),
+                (nombre, apellido, int(id_cliente)),
             )
 
             conn.commit()
@@ -329,13 +285,15 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
     # ------------------------------------------------------------
     # UI
     # ------------------------------------------------------------
-    txt_buscar = ft.TextField(label="Buscar usuario/cliente", border_radius=12, expand=True)
+    txt_buscar = ft.TextField(label="Buscar cliente", border_radius=12, expand=True)
+    lbl_resultados = ft.Text("", size=12, color="#6B7280")
 
     def _editar_fila(fila):
         abrir_dialogo_editar(fila)
 
     def _eliminar_fila(fila):
-        confirmar_eliminar(int(fila["IdCliente"]))
+        nombre_cliente = f"{fila.get('Nombre', '')} {fila.get('Apellido', '')}".strip()
+        confirmar_eliminar(int(fila["IdCliente"]), nombre_cliente)
 
     # En escritorio se ve como tabla; en celular, una tarjeta por cliente.
     tabla = TablaResponsiva(
@@ -344,8 +302,9 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             ColumnaTabla("ID Cliente", "IdCliente",     icono="TAG",            en_tarjeta=False),
             ColumnaTabla("Nombre",     "Nombre",        icono="PERSON",         en_tarjeta=False),
             ColumnaTabla("Apellido",   "Apellido",      icono="PERSON",         en_tarjeta=False),
-            ColumnaTabla("Teléfono",   "Telefono",      icono="PHONE"),
-            ColumnaTabla("Correo",     "Correo",        icono="MAIL"),
+            # Datos privados: solo se ven los últimos 4 caracteres.
+            ColumnaTabla("Teléfono",   lambda f: enmascarar_telefono(f.get("Telefono")), icono="PHONE"),
+            ColumnaTabla("Correo",     lambda f: enmascarar_correo(f.get("Correo")),     icono="MAIL"),
             ColumnaTabla("Usuario",    "NombreUsuario", icono="ACCOUNT_CIRCLE", en_tarjeta=False),
         ],
         acciones=[
@@ -376,120 +335,93 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
         lista = cache
 
         if q:
+            # Se busca por nombre completo, usuario o número de cliente.
+            # Ya no por teléfono ni correo completos: si se pudiera, el
+            # buscador serviría para adivinar esos datos privados.
             lista = [
                 x for x in lista
                 if q in str(x.get("IdCliente", "")).lower()
-                or q in str(x.get("Nombre", "")).lower()
-                or q in str(x.get("Apellido", "")).lower()
-                or q in str(x.get("Telefono", "")).lower()
-                or q in str(x.get("Correo", "")).lower()
+                or q in f"{x.get('Nombre', '')} {x.get('Apellido', '')}".lower()
                 or q in str(x.get("NombreUsuario", "")).lower()
             ]
 
+        btn_limpiar_busqueda.visible = bool(q)
+        if q:
+            lbl_resultados.value = f"{len(lista)} de {len(cache)} clientes"
+        else:
+            lbl_resultados.value = f"{len(cache)} clientes registrados"
         pintar_tabla(lista)
+        try:
+            btn_limpiar_busqueda.update()
+            lbl_resultados.update()
+        except Exception:
+            pass
 
+    def limpiar_busqueda(e=None):
+        txt_buscar.value = ""
+        aplicar_filtro()
+        try:
+            txt_buscar.update()
+            txt_buscar.focus()
+        except Exception:
+            pass
+
+    btn_limpiar_busqueda = ft.IconButton(
+        icon=icono("CLOSE"),
+        icon_size=18,
+        tooltip="Limpiar búsqueda",
+        visible=False,
+        on_click=limpiar_busqueda,
+    )
+    txt_buscar.suffix = btn_limpiar_busqueda
     txt_buscar.on_change = aplicar_filtro
 
     def pintar_tabla(lista):
         tabla.actualizar(lista)
 
-    def abrir_dialogo_nuevo(e=None):
-        txt_nombre = ft.TextField(label="Nombre", border_radius=12)
-        txt_apellido = ft.TextField(label="Apellido", border_radius=12)
-        txt_telefono = ft.TextField(label="Teléfono", border_radius=12, keyboard_type=ft.KeyboardType.NUMBER)
-        txt_correo = ft.TextField(label="Correo", border_radius=12)
-        txt_usuario = ft.TextField(label="Nombre de usuario", border_radius=12)
-        txt_pass = ft.TextField(label="Contraseña", password=True, can_reveal_password=True, border_radius=12)
-
-        dlg = ft.AlertDialog(title=ft.Text("Nuevo cliente"))
-
-        def guardar(ev):
-            nombre = validar_texto(txt_nombre.value)
-            apellido = validar_texto(txt_apellido.value)
-            telefono = validar_texto(txt_telefono.value)
-            correo = validar_texto(txt_correo.value)
-            usuario = validar_texto(txt_usuario.value)
-            password = validar_texto(txt_pass.value)
-
-            for f in [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass]:
-                f.error_text = None
-
-            ok = True
-
-            if not nombre:
-                txt_nombre.error_text = "Requerido"
-                ok = False
-            if not apellido:
-                txt_apellido.error_text = "Requerido"
-                ok = False
-            if not telefono or not telefono.isdigit():
-                txt_telefono.error_text = "Solo números"
-                ok = False
-            if not correo or "@" not in correo or "." not in correo:
-                txt_correo.error_text = "Correo inválido"
-                ok = False
-            if not usuario:
-                txt_usuario.error_text = "Requerido"
-                ok = False
-            elif db_existe_usuario(usuario):
-                txt_usuario.error_text = "Ese usuario ya existe"
-                ok = False
-            politica = seguridad.validar_fortaleza(password, usuario)
-            if not politica.valida:
-                txt_pass.error_text = politica.mensaje
-                ok = False
-
-            page.update()
-
-            if not ok:
-                return
-
-            try:
-                db_crear_cliente(nombre, apellido, telefono, correo, usuario, password)
-                close_dialog(dlg)
-                recargar()
-                show_snack("Cliente registrado correctamente")
-            except Exception as ex:
-                show_snack(f"No se pudo registrar: {ex}", ok=False)
-
-        dlg.content = ft.Container(
-            width=500,
-            content=ft.Column(
-                [
-                    txt_nombre,
-                    txt_apellido,
-                    txt_telefono,
-                    txt_correo,
-                    ft.Divider(),
-                    txt_usuario,
-                    txt_pass,
-                ],
-                tight=True,
-            ),
-        )
-        dlg.actions = [
-            ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
-            ft.ElevatedButton("Guardar", bgcolor="#C86DD7", color="white", on_click=guardar),
-        ]
-        dlg.actions_alignment = ft.MainAxisAlignment.END
-        open_dialog(dlg)
-
     def abrir_dialogo_editar(cliente: dict):
-        txt_nombre = ft.TextField(label="Nombre", border_radius=12, value=str(cliente.get("Nombre", "")))
-        txt_apellido = ft.TextField(label="Apellido", border_radius=12, value=str(cliente.get("Apellido", "")))
-        txt_telefono = ft.TextField(
-            label="Teléfono",
+        """Editar cliente: nombre, apellido, usuario y contraseña.
+
+        Sirve para que el cliente recupere su cuenta si olvidó el usuario
+        o la contraseña: el administrador le asigna unos nuevos. El
+        teléfono y el correo se muestran tapados y no se pueden cambiar.
+        """
+        txt_nombre = ft.TextField(label="Nombre", border_radius=12, value=str(cliente.get("Nombre") or ""))
+        txt_apellido = ft.TextField(label="Apellido", border_radius=12, value=str(cliente.get("Apellido") or ""))
+
+        def dato_privado(etiqueta, valor, nombre_icono):
+            return ft.TextField(
+                label=etiqueta,
+                value=valor or "Sin registrar",
+                read_only=True,
+                border_radius=12,
+                prefix_icon=icono(nombre_icono),
+                suffix_icon=icono("LOCK"),
+                tooltip="Dato privado: no se puede modificar",
+            )
+
+        txt_telefono = dato_privado("Teléfono", enmascarar_telefono(cliente.get("Telefono")), "PHONE")
+        txt_correo = dato_privado("Correo", enmascarar_correo(cliente.get("Correo")), "MAIL")
+
+        txt_usuario = ft.TextField(
+            label="Nombre de usuario",
             border_radius=12,
-            value=str(cliente.get("Telefono", "")),
-            keyboard_type=ft.KeyboardType.NUMBER,
+            value=str(cliente.get("NombreUsuario") or ""),
+            prefix_icon=icono("ACCOUNT_CIRCLE"),
         )
-        txt_correo = ft.TextField(label="Correo", border_radius=12, value=str(cliente.get("Correo", "")))
-        txt_usuario = ft.TextField(label="Nombre de usuario", border_radius=12, value=str(cliente.get("NombreUsuario", "")))
         txt_pass = ft.TextField(
             label="Nueva contraseña (opcional)",
             password=True,
             can_reveal_password=True,
             border_radius=12,
+            prefix_icon=icono("KEY", "LOCK_RESET"),
+        )
+        txt_pass2 = ft.TextField(
+            label="Confirmar nueva contraseña",
+            password=True,
+            can_reveal_password=True,
+            border_radius=12,
+            prefix_icon=icono("KEY", "LOCK_RESET"),
         )
 
         dlg = ft.AlertDialog(title=ft.Text(f"Editar cliente #{cliente.get('IdCliente')}"))
@@ -497,46 +429,61 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
         def guardar(ev):
             nombre = validar_texto(txt_nombre.value)
             apellido = validar_texto(txt_apellido.value)
-            telefono = validar_texto(txt_telefono.value)
-            correo = validar_texto(txt_correo.value)
             usuario = validar_texto(txt_usuario.value)
             password = validar_texto(txt_pass.value)
+            password2 = validar_texto(txt_pass2.value)
 
-            for f in [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass]:
-                f.error_text = None
+            for f in [txt_nombre, txt_apellido, txt_usuario, txt_pass, txt_pass2]:
+                set_error(f, None)
 
             ok = True
 
             if not nombre:
-                txt_nombre.error_text = "Requerido"
+                set_error(txt_nombre, "Requerido")
                 ok = False
             if not apellido:
-                txt_apellido.error_text = "Requerido"
-                ok = False
-            if not telefono or not telefono.isdigit():
-                txt_telefono.error_text = "Solo números"
-                ok = False
-            if not correo or "@" not in correo or "." not in correo:
-                txt_correo.error_text = "Correo inválido"
+                set_error(txt_apellido, "Requerido")
                 ok = False
 
             usuario_id = cliente.get("Usuario_IdUsuario")
             if not usuario:
-                txt_usuario.error_text = "Requerido"
+                set_error(txt_usuario, "Requerido")
                 ok = False
-            elif db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
-                txt_usuario.error_text = "Ese usuario ya existe"
-                ok = False
+            else:
+                ok_u, msg_u, usuario = validar_usuario(usuario, 20)
+                if not ok_u:
+                    set_error(txt_usuario, msg_u)
+                    ok = False
+            if ok and usuario:
+                try:
+                    if db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
+                        set_error(txt_usuario, "Ese usuario ya existe")
+                        ok = False
+                except Exception as ex:
+                    _repintar(dlg, [txt_nombre, txt_apellido, txt_usuario, txt_pass, txt_pass2])
+                    show_snack(f"No se pudo revisar el usuario: {ex}", ok=False)
+                    return
 
-            if password:
+            if password or password2:
                 politica = seguridad.validar_fortaleza(password, usuario)
                 if not politica.valida:
-                    txt_pass.error_text = politica.mensaje
+                    set_error(txt_pass, politica.mensaje)
+                    ok = False
+                elif password != password2:
+                    set_error(txt_pass2, "Las contraseñas no coinciden")
                     ok = False
 
-            page.update()
+            _repintar(dlg, [txt_nombre, txt_apellido, txt_usuario, txt_pass, txt_pass2])
 
             if not ok:
+                # El mensaje rojo queda bajo el campo y en el celular
+                # puede quedar fuera de la vista: se avisa también abajo.
+                mensajes = [
+                    f"{c.label}: {get_error(c)}"
+                    for c in (txt_nombre, txt_apellido, txt_usuario, txt_pass, txt_pass2)
+                    if get_error(c)
+                ]
+                show_snack(mensajes[0] if mensajes else "Revisa los campos marcados.", ok=False)
                 return
 
             try:
@@ -544,30 +491,44 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
                     id_cliente=cliente["IdCliente"],
                     nombre=nombre,
                     apellido=apellido,
-                    telefono=telefono,
-                    correo=correo,
                     nombre_usuario=usuario,
                     password=password if password else None,
                 )
                 close_dialog(dlg)
                 recargar()
-                show_snack("Cliente actualizado correctamente")
+                if password:
+                    show_snack(f"Cliente actualizado. Su usuario es «{usuario}» y ya puede entrar con la nueva contraseña.")
+                else:
+                    show_snack("Cliente actualizado correctamente")
             except Exception as ex:
                 show_snack(f"No se pudo actualizar: {ex}", ok=False)
 
+        ancho = getattr(page, "width", None) or 500
+        alto = getattr(page, "height", None) or 700
         dlg.content = ft.Container(
-            width=500,
+            width=min(460, ancho - 48),
             content=ft.Column(
                 [
                     txt_nombre,
                     txt_apellido,
+                    ft.Text("Datos privados (solo lectura)", size=12, color="#6B7280"),
                     txt_telefono,
                     txt_correo,
                     ft.Divider(),
+                    ft.Text(
+                        "Acceso a la cuenta: cambia el usuario o asigna una contraseña nueva si el cliente la olvidó.",
+                        size=12,
+                        color="#6B7280",
+                    ),
                     txt_usuario,
                     txt_pass,
+                    txt_pass2,
                 ],
                 tight=True,
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                scroll=ft.ScrollMode.AUTO,
+                height=max(300, min(520, alto * 0.6)),
             ),
         )
         dlg.actions = [
@@ -577,7 +538,7 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
         dlg.actions_alignment = ft.MainAxisAlignment.END
         open_dialog(dlg)
 
-    def confirmar_eliminar(id_cliente: int):
+    def confirmar_eliminar(id_cliente: int, nombre_cliente: str = ""):
         dlg = ft.AlertDialog(title=ft.Text("Eliminar cliente"))
 
         def eliminar(ev):
@@ -589,7 +550,8 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
             except Exception as ex:
                 show_snack(f"No se pudo eliminar: {ex}", ok=False)
 
-        dlg.content = ft.Text("¿Deseas eliminar este cliente y su usuario?")
+        quien = f"a {nombre_cliente} (#{id_cliente})" if nombre_cliente else "este cliente"
+        dlg.content = ft.Text(f"¿Deseas eliminar {quien} y su usuario? Esta acción no se puede deshacer.")
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
             ft.ElevatedButton("Eliminar", bgcolor="#C62828", color="white", on_click=eliminar),
@@ -599,20 +561,17 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
 
     recargar()
 
-    header = ft.Row(
+    # Sin botón de alta: los clientes se registran solos desde la app.
+    header = ft.Column(
         [
-            ft.Text("Control de usuarios (Clientes)", size=22, weight="bold", color="#C86DD7"),
-            ft.Container(expand=True),
-            txt_buscar,
-            ft.ElevatedButton(
-                "+ Nuevo cliente",
-                bgcolor="#C86DD7",
-                color="white",
-                on_click=abrir_dialogo_nuevo,
-                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=20), padding=18),
+            encabezado_con_busqueda(
+                "Control de usuarios (Clientes)",
+                txt_buscar,
+                "Buscar por nombre, usuario o número de cliente",
             ),
+            lbl_resultados,
         ],
-        alignment=ft.MainAxisAlignment.CENTER,
+        spacing=6,
     )
 
     content = ft.Container(
@@ -627,12 +586,9 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
                     expand=True,
                     content=tabla.control,
                 ),
-                ft.Row(
-                    [
-                        ft.Text(f"Admin: {nombre_admin}", size=12, color="#888888"),
-                        ft.Container(expand=True),
-                        ft.TextButton("Volver", on_click=volver_admin),                    ]
-                )
+                # Sin botón "Volver": para regresar está "Inicio" en el
+                # menú lateral.
+                ft.Text(f"Admin: {nombre_admin}", size=12, color="#888888"),
             ],
             expand=True,
         ),
@@ -652,4 +608,12 @@ def admin_usuarios_view(page: ft.Page, nombre_admin: str = "Administrador") -> f
 
     layout = admin_layout(page, sidebar, content)
 
-    return ft.View(route="/admin_usuarios", controls=[layout], appbar=appbar)
+    # padding=0 y el mismo fondo que Inicio: sin esto Flet deja un margen
+    # de 10 px alrededor del sidebar.
+    return ft.View(
+        route="/admin_usuarios",
+        controls=[layout],
+        appbar=appbar,
+        bgcolor="#F9F6FB",
+        padding=0,
+    )

@@ -248,7 +248,6 @@ def build_admin_sidebar(
 
     titulo = ft.Text("Corallie Bubble", size=18, weight="bold", color="white")
     subtitulo = ft.Text("Administrador", size=12, color="#F7E8FF")
-    lbl_bienvenida = ft.Text(f"Bienvenido, {nombre}", size=12, color="white70")
 
     toggle_icon = ft.IconButton(
         icon=ICON_ARROW_LEFT,
@@ -271,9 +270,9 @@ def build_admin_sidebar(
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                ft.Container(height=10),
-                lbl_bienvenida,
-                ft.Container(height=26),
+                # Aquí iba "Bienvenido, <nombre>"; se quitó porque la
+                # pantalla de inicio ya saluda con la misma frase.
+                ft.Container(height=30),
                 ft.Column(nav_controls, spacing=6),
                 ft.Container(expand=True),
                 nav_item(ICON_LOGOUT, "Cerrar sesión", al_tocar(confirmar_cierre)),
@@ -287,7 +286,6 @@ def build_admin_sidebar(
         sidebar.padding = 12 if collapsed else 20
         titulo.visible = not collapsed
         subtitulo.visible = not collapsed
-        lbl_bienvenida.visible = not collapsed
         toggle_icon.icon = ICON_ARROW_RIGHT if collapsed else ICON_ARROW_LEFT
         toggle_icon.tooltip = "Mostrar menú" if collapsed else "Ocultar menú"
         for ref in nav_refs:
@@ -307,10 +305,19 @@ def build_admin_sidebar(
     return sidebar
 
 
-def admin_layout(page: ft.Page, sidebar: ft.Control, contenido: ft.Control) -> ft.Control:
+def admin_layout(
+    page: ft.Page,
+    sidebar: ft.Control,
+    contenido: ft.Control,
+    alineacion_vertical=None,
+) -> ft.Control:
     """Acomoda el sidebar y el contenido de una pantalla de administrador.
 
     En escritorio van lado a lado. En celular el sidebar se monta encima
     del contenido, con un velo que lo cierra al tocar fuera.
+
+    alineacion_vertical (solo escritorio): con ft.CrossAxisAlignment.STRETCH
+    el contenido ocupa todo el alto y empieza arriba en vez de quedar
+    centrado a media pantalla.
     """
-    return layout_con_sidebar(page, sidebar, contenido)
+    return layout_con_sidebar(page, sidebar, contenido, alineacion_vertical=alineacion_vertical)

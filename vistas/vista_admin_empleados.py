@@ -5,6 +5,8 @@ from servicios.servicio_seguridad import hashear
 from componentes.appbar_admin import build_admin_appbar
 from componentes.sidebar_admin import admin_layout, build_admin_sidebar
 from componentes.tabla_responsiva import TablaResponsiva, ColumnaTabla, AccionTabla
+from componentes.encabezado_admin import encabezado_con_busqueda
+from componentes.campo_privado import enmascarar_correo, enmascarar_telefono
 
 from validaciones.validacion_personas import (
     validar_nombre,
@@ -13,7 +15,7 @@ from validaciones.validacion_personas import (
     validar_usuario,
     validar_password,
 )
-from utilidades.flet_compat import set_error, get_error
+from utilidades.flet_compat import set_error, get_error, icono, snack
 
 # Compatibilidad íconos
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -82,21 +84,10 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             pass
 
     def show_snack(texto: str, ok: bool = True):
-        sb = ft.SnackBar(
-            content=ft.Text(texto, color="white"),
-            bgcolor="#2E7D32" if ok else "#C62828",
-        )
-        try:
-            if hasattr(page, "open"):
-                page.open(sb)
-            else:
-                page.snack_bar = sb
-                sb.open = True
-                page.update()
-        except Exception:
-            page.snack_bar = sb
-            sb.open = True
-            page.update()
+        # page.snack_bar ya no existe en Flet 0.80: los avisos (incluidos
+        # los errores al guardar o eliminar) no se veían y parecía que los
+        # botones no hacían nada. flet_compat.snack usa show_dialog.
+        snack(page, texto, ok=ok)
 
     # ----------------------------------------------------------------
     # Navegación
@@ -272,7 +263,12 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             except Exception:
                 pass
 
-    def db_editar_empleado(id_empleado, nombre, apellido, telefono, correo, nombre_usuario, password=None):
+    def db_editar_empleado(id_empleado, nombre, apellido, nombre_usuario, password=None):
+        """Actualiza nombre, apellido, usuario y (opcional) contraseña.
+
+        El teléfono y el correo NO se modifican desde aquí: son datos
+        privados y el administrador solo ve los últimos 4 caracteres.
+        """
         conn = cur = None
         try:
             conn = get_connection()
@@ -304,10 +300,10 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             cur.execute(
                 """
                 UPDATE empleado
-                SET Nombre=%s, Apellido=%s, Telefono=%s, Correo=%s
+                SET Nombre=%s, Apellido=%s
                 WHERE IdEmpleado=%s
                 """,
-                (nombre, apellido, telefono, correo, int(id_empleado)),
+                (nombre, apellido, int(id_empleado)),
             )
             conn.commit()
         except Exception:
@@ -357,11 +353,13 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
     # ----------------------------------------------------------------
     txt_buscar = ft.TextField(label="Buscar empleado", border_radius=12, expand=True)
 
+
     def _editar_fila(fila):
         abrir_dialogo_editar(fila)
 
     def _eliminar_fila(fila):
-        confirmar_eliminar(int(fila["IdEmpleado"]))
+        nombre_empleado = f"{fila.get('Nombre', '')} {fila.get('Apellido', '')}".strip()
+        confirmar_eliminar(int(fila["IdEmpleado"]), nombre_empleado)
 
     # En escritorio se ve como tabla; en celular, una tarjeta por empleado.
     tabla = TablaResponsiva(
@@ -370,11 +368,14 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             ColumnaTabla("ID",       "IdEmpleado",    icono="TAG",            en_tarjeta=False),
             ColumnaTabla("Nombre",   "Nombre",        icono="PERSON",         en_tarjeta=False),
             ColumnaTabla("Apellido", "Apellido",      icono="PERSON",         en_tarjeta=False),
-            ColumnaTabla("Teléfono", "Telefono",      icono="PHONE"),
-            ColumnaTabla("Correo",   "Correo",        icono="MAIL"),
+            # Datos personales tapados: solo los últimos 4 caracteres.
+            ColumnaTabla("Teléfono", lambda f: enmascarar_telefono(f.get("Telefono")), icono="PHONE"),
+            ColumnaTabla("Correo",   lambda f: enmascarar_correo(f.get("Correo")),     icono="MAIL"),
             ColumnaTabla("Usuario",  "NombreUsuario", icono="ACCOUNT_CIRCLE", en_tarjeta=False),
         ],
         acciones=[
+            # Editar solo cambia nombre, apellido, usuario y contraseña
+            # (para recuperar la cuenta); teléfono y correo no se tocan.
             AccionTabla("Editar",   _editar_fila,   icono="EDIT"),
             AccionTabla("Eliminar", _eliminar_fila, icono="DELETE", peligrosa=True),
         ],
@@ -395,17 +396,44 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         q    = (txt_buscar.value or "").strip().lower()
         lista = cache
         if q:
+            # Por nombre completo, usuario o número de empleado. Ya no por
+            # teléfono ni correo completos: servirían para adivinarlos.
             lista = [
                 x for x in lista
-                if q in str(x.get("IdEmpleado",    "")).lower()
-                or q in str(x.get("Nombre",        "")).lower()
-                or q in str(x.get("Apellido",      "")).lower()
-                or q in str(x.get("Telefono",      "")).lower()
-                or q in str(x.get("Correo",        "")).lower()
+                if q in str(x.get("IdEmpleado", "")).lower()
+                or q in f"{x.get('Nombre', '')} {x.get('Apellido', '')}".lower()
                 or q in str(x.get("NombreUsuario", "")).lower()
             ]
+        btn_limpiar_busqueda.visible = bool(q)
+        if q:
+            lbl_resultados.value = f"{len(lista)} de {len(cache)} empleados"
+        else:
+            lbl_resultados.value = f"{len(cache)} empleados registrados"
         pintar_tabla(lista)
+        try:
+            btn_limpiar_busqueda.update()
+            lbl_resultados.update()
+        except Exception:
+            pass
 
+    def limpiar_busqueda(e=None):
+        txt_buscar.value = ""
+        aplicar_filtro()
+        try:
+            txt_buscar.update()
+            txt_buscar.focus()
+        except Exception:
+            pass
+
+    lbl_resultados = ft.Text("", size=12, color="#6B7280")
+    btn_limpiar_busqueda = ft.IconButton(
+        icon=icono("CLOSE"),
+        icon_size=18,
+        tooltip="Limpiar búsqueda",
+        visible=False,
+        on_click=limpiar_busqueda,
+    )
+    txt_buscar.suffix = btn_limpiar_busqueda
     txt_buscar.on_change = aplicar_filtro
 
     def recargar():
@@ -523,6 +551,8 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             controls=controles,
             tight=True,
             spacing=10,
+            # Los campos ocupan todo el ancho del diálogo.
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             scroll=ft.ScrollMode.AUTO,
             height=max(260, min(420, alto_pantalla * 0.5)),
         )
@@ -834,132 +864,116 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
         open_dialog(dlg)
 
     # ----------------------------------------------------------------
-    # Diálogo: Editar empleado
+    # Diálogo: Editar empleado (recuperar usuario / contraseña)
     # ----------------------------------------------------------------
     def abrir_dialogo_editar(empleado: dict):
-        txt_nombre   = ft.TextField(label="Nombre",            border_radius=12,
-                                    value=str(empleado.get("Nombre",        "")), max_length=30)
-        txt_apellido = ft.TextField(label="Apellido",          border_radius=12,
-                                    value=str(empleado.get("Apellido",      "")), max_length=30)
-        txt_telefono = ft.TextField(
-            label="Teléfono", border_radius=12, max_length=10,
-            value=str(empleado.get("Telefono", "")),
-            keyboard_type=ft.KeyboardType.NUMBER,
+        """Editar empleado: nombre, apellido, usuario y contraseña.
+
+        Sirve para que el empleado recupere su cuenta si olvidó el usuario
+        o la contraseña: el administrador le asigna unos nuevos. El
+        teléfono y el correo se muestran tapados y no se pueden cambiar.
+        """
+        txt_nombre = ft.TextField(label="Nombre", border_radius=12, max_length=30,
+                                  value=str(empleado.get("Nombre") or ""))
+        txt_apellido = ft.TextField(label="Apellido", border_radius=12, max_length=30,
+                                    value=str(empleado.get("Apellido") or ""))
+
+        def dato_privado(etiqueta, valor, nombre_icono):
+            return ft.TextField(
+                label=etiqueta,
+                value=valor or "Sin registrar",
+                read_only=True,
+                border_radius=12,
+                prefix_icon=icono(nombre_icono),
+                suffix_icon=icono("LOCK"),
+                tooltip="Dato privado: no se puede modificar",
+            )
+
+        txt_telefono = dato_privado("Teléfono", enmascarar_telefono(empleado.get("Telefono")), "PHONE")
+        txt_correo = dato_privado("Correo", enmascarar_correo(empleado.get("Correo")), "MAIL")
+
+        txt_usuario = ft.TextField(
+            label="Nombre de usuario", border_radius=12, max_length=20,
+            value=str(empleado.get("NombreUsuario") or ""),
+            prefix_icon=icono("ACCOUNT_CIRCLE"),
         )
-        txt_correo, bloque_ayuda_correo = crear_campo_correo(empleado.get("Correo", ""))
-        txt_usuario  = ft.TextField(label="Nombre de usuario", border_radius=12,
-                                    value=str(empleado.get("NombreUsuario", "")), max_length=20)
-        txt_pass     = ft.TextField(
-            label="Nueva contraseña (opcional)",
-            password=True, can_reveal_password=True, border_radius=12,
+        txt_pass = ft.TextField(
+            label="Nueva contraseña (opcional)", password=True, can_reveal_password=True,
+            border_radius=12, prefix_icon=icono("KEY", "LOCK_RESET"),
+        )
+        txt_pass2 = ft.TextField(
+            label="Confirmar nueva contraseña", password=True, can_reveal_password=True,
+            border_radius=12, prefix_icon=icono("KEY", "LOCK_RESET"),
         )
 
-        _attach_limpieza(txt_nombre, txt_apellido, txt_telefono, txt_usuario)
+        _attach_limpieza(txt_nombre, txt_apellido, ft.TextField(), txt_usuario)
 
         dlg = ft.AlertDialog(
             title=ft.Text(f"Editar empleado #{empleado.get('IdEmpleado')}"),
             modal=True,
         )
+        campos = [txt_nombre, txt_apellido, txt_usuario, txt_pass, txt_pass2]
 
         def guardar(ev):
-            # Mismo criterio que en el alta: primero el formato, sin
-            # tocar la base; los duplicados después y protegidos, para
-            # que un fallo de conexión no impida ver los errores.
-            nombre   = _limpiar(txt_nombre.value)
-            apellido = _limpiar(txt_apellido.value)
-            telefono = _limpiar(txt_telefono.value)
-            correo   = _limpiar(txt_correo.value).lower()
-            usuario  = _limpiar(txt_usuario.value)
-            password = _limpiar(txt_pass.value)
-
-            campos = [txt_nombre, txt_apellido, txt_telefono,
-                      txt_correo, txt_usuario, txt_pass]
             for f in campos:
                 set_error(f)
 
-            # --- Fase 1: formato (sin base de datos) ---
             ok = True
-
-            ok_n, msg, nombre = validar_nombre(nombre, "Nombre", 30)
+            ok_n, msg, nombre = validar_nombre(_limpiar(txt_nombre.value), "Nombre", 30)
             if not ok_n:
                 set_error(txt_nombre, msg)
                 ok = False
 
-            ok_a, msg, apellido = validar_nombre(apellido, "Apellido", 30)
+            ok_a, msg, apellido = validar_nombre(_limpiar(txt_apellido.value), "Apellido", 30)
             if not ok_a:
                 set_error(txt_apellido, msg)
                 ok = False
 
-            ok_t, msg, telefono = validar_telefono(telefono, 10)
-            if not ok_t:
-                set_error(txt_telefono, msg)
-                ok = False
-
-            ok_c, msg, correo = validar_correo(correo)
-            if not ok_c:
-                set_error(txt_correo, msg)
-                ok = False
-
-            ok_u, msg, usuario = validar_usuario(usuario, 20)
+            ok_u, msg, usuario = validar_usuario(_limpiar(txt_usuario.value), 20)
             if not ok_u:
                 set_error(txt_usuario, msg)
                 ok = False
 
-            # La contraseña es opcional al editar.
-            ok_p, msg, password = validar_password(password, obligatorio=False)
-            if not ok_p:
-                set_error(txt_pass, msg)
-                ok = False
+            password = _limpiar(txt_pass.value)
+            password2 = _limpiar(txt_pass2.value)
+            if password or password2:
+                ok_p, msg, password = validar_password(password, obligatorio=True, nombre_usuario=usuario or "")
+                if not ok_p:
+                    set_error(txt_pass, msg)
+                    ok = False
+                elif password != password2:
+                    set_error(txt_pass2, "Las contraseñas no coinciden")
+                    ok = False
 
+            if ok:
+                try:
+                    if db_existe_usuario(usuario, exclude_id_usuario=empleado.get("Usuario_IdUsuario")):
+                        set_error(txt_usuario, "Ese usuario ya existe")
+                        ok = False
+                except Exception as ex:
+                    _refrescar_campos(campos, dlg)
+                    show_snack(f"No se pudo revisar el usuario: {ex}", ok=False)
+                    return
+
+            _refrescar_campos(campos, dlg)
             if not ok:
-                _refrescar_campos(campos, dlg)
-                _avisar_errores(campos)
-                return
-
-            # --- Fase 2: duplicados, excluyendo el propio registro ---
-            id_empleado = empleado.get("IdEmpleado")
-            usuario_id  = empleado.get("Usuario_IdUsuario")
-            try:
-                existe, msg_dup = db_existe_dato_persona(
-                    "Telefono", telefono, "empleado", id_empleado
-                )
-                if existe:
-                    set_error(txt_telefono, msg_dup)
-                    ok = False
-
-                existe, msg_dup = db_existe_dato_persona(
-                    "Correo", correo, "empleado", id_empleado
-                )
-                if existe:
-                    set_error(txt_correo, msg_dup)
-                    ok = False
-
-                if db_existe_usuario(usuario, exclude_id_usuario=usuario_id):
-                    set_error(txt_usuario, "Ese usuario ya existe")
-                    ok = False
-            except Exception as ex:
-                _refrescar_campos(campos, dlg)
-                show_snack(f"No se pudo verificar duplicados: {ex}", ok=False)
-                return
-
-            if not ok:
-                _refrescar_campos(campos, dlg)
                 _avisar_errores(campos)
                 return
 
             try:
                 db_editar_empleado(
-                    id_empleado=id_empleado,
+                    id_empleado=empleado.get("IdEmpleado"),
                     nombre=nombre,
                     apellido=apellido,
-                    telefono=telefono,
-                    correo=correo,
                     nombre_usuario=usuario,
                     password=password if password else None,
                 )
                 close_dialog(dlg)
                 recargar()
-                show_snack("Empleado actualizado correctamente")
+                if password:
+                    show_snack(f"Empleado actualizado. Su usuario es «{usuario}» y ya puede entrar con la nueva contraseña.")
+                else:
+                    show_snack("Empleado actualizado correctamente")
             except Exception as ex:
                 show_snack(f"No se pudo actualizar: {ex}", ok=False)
 
@@ -967,14 +981,20 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
             [
                 txt_nombre,
                 txt_apellido,
+                ft.Text("Datos privados (solo lectura)", size=12, color="#6B7280"),
                 txt_telefono,
                 txt_correo,
-                bloque_ayuda_correo,
                 ft.Divider(),
+                ft.Text(
+                    "Acceso a la cuenta: cambia el usuario o asigna una contraseña nueva si el empleado la olvidó.",
+                    size=12,
+                    color="#6B7280",
+                ),
                 txt_usuario,
                 txt_pass,
+                txt_pass2,
             ],
-            [txt_nombre, txt_apellido, txt_telefono, txt_correo, txt_usuario, txt_pass],
+            campos,
         )
         dlg.actions = [
             ft.TextButton("Cancelar", on_click=lambda ev: close_dialog(dlg)),
@@ -986,11 +1006,12 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
     # ----------------------------------------------------------------
     # Confirmar eliminación
     # ----------------------------------------------------------------
-    def confirmar_eliminar(id_empleado: int):
+    def confirmar_eliminar(id_empleado: int, nombre_empleado: str = ""):
+        quien = f"a {nombre_empleado} (#{id_empleado})" if nombre_empleado else "este empleado"
         dlg = ft.AlertDialog(
             modal=True,
             title=ft.Text("Eliminar empleado"),
-            content=ft.Text("¿Deseas eliminar este empleado? También se eliminará su usuario."),
+            content=ft.Text(f"¿Deseas eliminar {quien}? También se eliminará su usuario. Esta acción no se puede deshacer."),
         )
 
         def cancelar(e=None): close_dialog(dlg)
@@ -1016,54 +1037,20 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
     # ----------------------------------------------------------------
     # Layout
     # ----------------------------------------------------------------
-    # El encabezado era un solo Row: título + buscador (expand) + botón.
-    # En un celular el Row se desbordaba, el botón quedaba aplastado a
-    # unos pocos píxeles fuera de la pantalla y su texto se partía letra
-    # por letra, así que no había forma de pulsarlo. Con ResponsiveRow se
-    # apila solo: en escritorio va todo en una línea, en móvil el
-    # buscador y el botón ocupan el ancho completo.
-    header = ft.ResponsiveRow(
-        controls=[
-            ft.Container(
-                col={"xs": 12, "md": 5},
-                content=ft.Text(
-                    "Control de empleados",
-                    size=22,
-                    weight="bold",
-                    color="#C86DD7",
-                    max_lines=2,
-                    overflow=ft.TextOverflow.ELLIPSIS,
-                ),
+    # Encabezado compartido con Control de usuarios: título arriba y
+    # buscador + botón debajo (en celular el botón baja a su renglón).
+    header = ft.Column(
+        [
+            encabezado_con_busqueda(
+                "Control de empleados",
+                txt_buscar,
+                "Buscar por nombre, usuario o número",
+                "Nuevo empleado",
+                abrir_dialogo_nuevo,
             ),
-            ft.Container(col={"xs": 12, "md": 4}, content=txt_buscar),
-            ft.Container(
-                col={"xs": 12, "md": 3},
-                content=ft.Column(
-                    horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
-                    tight=True,
-                    controls=[
-                        ft.ElevatedButton(
-                            content=ft.Text(
-                                "+ Nuevo empleado",
-                                size=14,
-                                weight="bold",
-                                no_wrap=True,
-                                text_align=ft.TextAlign.CENTER,
-                            ),
-                            bgcolor="#C86DD7",
-                            color="white",
-                            on_click=abrir_dialogo_nuevo,
-                            style=ft.ButtonStyle(
-                                shape=ft.RoundedRectangleBorder(radius=20),
-                                padding=16,
-                            ),
-                        ),
-                    ],
-                ),
-            ),
+            lbl_resultados,
         ],
-        run_spacing=10,
-        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+        spacing=6,
     )
 
     # Antes esta pantalla montaba su propio Stack para que el sidebar
@@ -1103,4 +1090,12 @@ def admin_empleados_view(page: ft.Page, nombre_admin: str = "Administrador") -> 
 
     appbar = build_admin_appbar(page, "Corallie Bubble - Admin")
 
-    return ft.View(route="/admin_empleados", controls=[content], appbar=appbar)
+    # padding=0 y el mismo fondo que Inicio: sin esto Flet deja un margen
+    # de 10 px y el sidebar no queda pegado a la barra ni a la orilla.
+    return ft.View(
+        route="/admin_empleados",
+        controls=[content],
+        appbar=appbar,
+        bgcolor="#F9F6FB",
+        padding=0,
+    )

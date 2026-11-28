@@ -985,10 +985,26 @@ def build_sidebar(
     return sidebar
 
 
-def sidebar_layout(page: ft.Page, sidebar: ft.Control, contenido: ft.Control, espaciado=None) -> ft.Control:
+def sidebar_layout(
+    page: ft.Page,
+    sidebar: ft.Control,
+    contenido: ft.Control,
+    espaciado=None,
+    alineacion_vertical=None,
+) -> ft.Control:
     """Acomoda el sidebar del empleado y el contenido de la pantalla.
 
     En escritorio van lado a lado. En celular el sidebar se monta encima
     del contenido, con un velo que lo cierra al tocar fuera.
+
+    alineacion_vertical (solo escritorio): por defecto Flet centra el
+    contenido a media altura; con ft.CrossAxisAlignment.STRETCH ocupa
+    todo el alto y su contenido empieza arriba.
     """
-    return layout_con_sidebar(page, sidebar, contenido, espaciado=espaciado)
+    return layout_con_sidebar(
+        page,
+        sidebar,
+        contenido,
+        espaciado=espaciado,
+        alineacion_vertical=alineacion_vertical,
+    )

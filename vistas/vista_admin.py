@@ -147,7 +147,14 @@ def admin_view(page: ft.Page, nombre: str = "Administrador") -> ft.View:
         ),
     )
 
-    layout = admin_layout(page, sidebar, main_content)
+    # STRETCH: igual que en el Punto de Venta, las tarjetas quedan arriba
+    # en vez de flotar a media pantalla.
+    layout = admin_layout(
+        page,
+        sidebar,
+        main_content,
+        alineacion_vertical=ft.CrossAxisAlignment.STRETCH,
+    )
 
     return ft.View(
         route="/admin",

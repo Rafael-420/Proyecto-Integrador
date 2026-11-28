@@ -5,7 +5,8 @@ Versión compacta: tarjetas cuadradas para usarse dentro de GridView.
 
 import flet as ft
 
-from utilidades.imagenes import foto_bebida
+from utilidades.flet_compat import abrir_dialogo, cerrar_dialogo
+from utilidades.imagenes import foto_bebida, tiene_foto, vaso_respaldo
 
 # Compatibilidad entre versiones recientes de Flet
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
@@ -44,18 +45,64 @@ def chip(texto: str, color_bg: str = "#F7E8FF", color_txt: str = "#6D28D9"):
     )
 
 
+def _mostrar_foto(e, item: dict):
+    """Abre la foto de la bebida en grande. Se cierra con el botón o
+    tocando fuera de la ventana."""
+    page = getattr(e, "page", None) or getattr(getattr(e, "control", None), "page", None)
+    if page is None:
+        return
+
+    ancho_pagina = getattr(page, "width", None) or 460
+    lado = max(200, min(460, ancho_pagina - 48))
+
+    foto = foto_bebida(
+        item,
+        lambda: vaso_respaldo(lado),
+        grande=True,
+        width=lado,
+        height=lado,
+        fit=ft.BoxFit.CONTAIN,
+    )
+
+    dlg = ft.AlertDialog(
+        content_padding=12,
+        title=ft.Text(
+            item.get("nombre", "Bebida"),
+            size=18,
+            weight=ft.FontWeight.BOLD,
+            color="#222222",
+        ),
+        content=ft.Container(
+            width=lado,
+            height=lado,
+            border_radius=18,
+            bgcolor="#FFF7FC",
+            alignment=ALIGN_CENTER,
+            clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
+            content=foto,
+        ),
+        actions=[
+            ft.TextButton("Cerrar", on_click=lambda ev: cerrar_dialogo(page, dlg)),
+        ],
+        actions_alignment=ft.MainAxisAlignment.END,
+    )
+    abrir_dialogo(page, dlg)
+
+
 def _miniatura_producto(item: dict):
     """Muestra la foto real del producto (guardada en la base de datos
-    por el admin); si no hay foto, cae de vuelta al emoji de siempre."""
+    por el admin); si no hay foto, muestra el vaso de assets/vaso.
+    Si tiene foto, al tocarla se abre en grande."""
     contenido = foto_bebida(
         item,
-        lambda: ft.Text(item.get("emoji", "🧋"), size=26),
+        lambda: vaso_respaldo(54),
         width=54,
         height=54,
         fit=ft.BoxFit.COVER,
         border_radius=18,
     )
 
+    con_foto = tiene_foto(item)
     return ft.Container(
         width=54,
         height=54,
@@ -64,6 +111,9 @@ def _miniatura_producto(item: dict):
         alignment=ALIGN_CENTER,
         clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
         content=contenido,
+        tooltip="Ver foto" if con_foto else None,
+        ink=con_foto,
+        on_click=(lambda e, producto=item: _mostrar_foto(e, producto)) if con_foto else None,
     )
 
 

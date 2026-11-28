@@ -966,7 +966,6 @@ def LoginView(page: ft.Page):
                     alignment=ft.MainAxisAlignment.CENTER,
                     spacing=14,
                 ),
-                ft.Text("♥", size=22, color=COLOR_ROSA, text_align=ft.TextAlign.CENTER),
                 formulario,
                 panel_sin_conexion,
             ],

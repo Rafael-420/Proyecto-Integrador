@@ -66,6 +66,11 @@ CARPETA_FOTOS_WEB = CARPETA_ASSETS / NOMBRE_CARPETA_WEB
 LADO_MINIATURA_WEB = 192
 CALIDAD_JPEG_WEB = 80
 
+# Versión grande para el visor que se abre al tocar la foto en el menú.
+# Solo se genera la primera vez que alguien la abre.
+LADO_GRANDE_WEB = 1000
+CALIDAD_JPEG_GRANDE_WEB = 85
+
 # Archivos de fotos viejas (la bebida cambió de foto) que se borran al
 # arrancar la app.
 DIAS_CONSERVAR_ARCHIVOS = 30
@@ -87,8 +92,8 @@ def _extension_por_firma(datos: bytes) -> str:
     return "jpg"
 
 
-def _miniatura(datos: bytes) -> tuple[bytes, str]:
-    """Reduce la foto a LADO_MINIATURA_WEB px. Devuelve (bytes, extensión).
+def _miniatura(datos: bytes, lado: int = LADO_MINIATURA_WEB) -> tuple[bytes, str]:
+    """Reduce la foto a `lado` px. Devuelve (bytes, extensión).
 
     Si Pillow no está o la foto no se puede abrir, se usa tal cual.
     """
@@ -103,13 +108,14 @@ def _miniatura(datos: bytes) -> tuple[bytes, str]:
                 original.mode == "P" and "transparency" in original.info
             )
             imagen = original.convert("RGBA" if tiene_alfa else "RGB")
-            imagen.thumbnail((LADO_MINIATURA_WEB, LADO_MINIATURA_WEB))
+            imagen.thumbnail((lado, lado))
 
             salida = io.BytesIO()
             if tiene_alfa:
                 imagen.save(salida, format="PNG", optimize=True)
                 return salida.getvalue(), "png"
-            imagen.save(salida, format="JPEG", quality=CALIDAD_JPEG_WEB, optimize=True)
+            calidad = CALIDAD_JPEG_WEB if lado <= LADO_MINIATURA_WEB else CALIDAD_JPEG_GRANDE_WEB
+            imagen.save(salida, format="JPEG", quality=calidad, optimize=True)
             return salida.getvalue(), "jpg"
     except Exception:
         return datos, _extension_por_firma(datos)
@@ -126,7 +132,7 @@ def _limpiar_archivos_viejos() -> None:
         pass
 
 
-def _ruta_web(datos: bytes) -> str | None:
+def _ruta_web(datos: bytes, grande: bool = False) -> str | None:
     """Guarda la miniatura en assets/_fotos_bebidas y devuelve su ruta.
 
     El nombre del archivo es la huella (SHA-1) de la foto: si el admin
@@ -135,16 +141,18 @@ def _ruta_web(datos: bytes) -> str | None:
     escribir el archivo (entonces se usa el método anterior).
     """
     huella = hashlib.sha1(datos).hexdigest()[:20]
+    # La miniatura conserva el nombre de siempre; la grande lleva "_g".
+    clave = f"{huella}_g" if grande else huella
 
     with _candado:
-        ruta = _rutas_web.get(huella)
+        ruta = _rutas_web.get(clave)
     if ruta:
         return ruta
 
     try:
-        contenido, extension = _miniatura(datos)
+        contenido, extension = _miniatura(datos, LADO_GRANDE_WEB if grande else LADO_MINIATURA_WEB)
         CARPETA_FOTOS_WEB.mkdir(parents=True, exist_ok=True)
-        nombre = f"{huella}.{extension}"
+        nombre = f"{clave}.{extension}"
         destino = CARPETA_FOTOS_WEB / nombre
         if destino.exists():
             # Se "toca" para que la limpieza no la borre mientras se use.
@@ -160,7 +168,7 @@ def _ruta_web(datos: bytes) -> str | None:
 
     ruta = f"{NOMBRE_CARPETA_WEB}/{nombre}"
     with _candado:
-        _rutas_web[huella] = ruta
+        _rutas_web[clave] = ruta
     return ruta
 
 
@@ -171,12 +179,15 @@ if _EN_WEB:
 # ------------------------------------------------------------
 # API para vistas y componentes
 # ------------------------------------------------------------
-def imagen_desde_bytes(datos: bytes, **opciones) -> ft.Image:
-    """Crea un ft.Image a partir de los bytes de la foto."""
+def imagen_desde_bytes(datos: bytes, grande: bool = False, **opciones) -> ft.Image:
+    """Crea un ft.Image a partir de los bytes de la foto.
+
+    grande=True usa la versión de alta resolución (visor de la foto).
+    """
     datos = bytes(datos)
 
     if _EN_WEB:
-        ruta = _ruta_web(datos)
+        ruta = _ruta_web(datos, grande=grande)
         if ruta:
             return ft.Image(src=ruta, **opciones)
 
@@ -185,7 +196,44 @@ def imagen_desde_bytes(datos: bytes, **opciones) -> ft.Image:
     return ft.Image(src=datos, **opciones)
 
 
-def foto_bebida(item: dict, crear_respaldo: Callable[[], ft.Control], **opciones) -> ft.Control:
+# Imágenes del proyecto (assets/) que sustituyen a los emojis de boba.
+RUTA_VASO = "vaso/vaso.png"
+RUTA_LOGO = "login/logo_corallie.png"
+RUTA_PERSONAJE = "login/personaje_bubble.png"
+
+
+def imagen_proyecto(ruta: str, lado: float, descripcion: str = "") -> ft.Image:
+    """Imagen de assets/ cuadrada, sin recortar (CONTAIN)."""
+    return ft.Image(
+        src=ruta,
+        width=lado,
+        height=lado,
+        fit=ft.BoxFit.CONTAIN,
+        semantics_label=descripcion or None,
+    )
+
+
+def vaso_respaldo(lado: float) -> ft.Image:
+    """Vaso del proyecto para bebidas sin foto (antes era el emoji 🧋).
+
+    Se dibuja un poco más chico que el recuadro para que no quede pegado
+    a las orillas redondeadas.
+    """
+    return imagen_proyecto(RUTA_VASO, round(lado * 0.78), "Bebida sin foto")
+
+
+def tiene_foto(item: dict) -> bool:
+    """True si la bebida tiene foto (en la base de datos o ruta vieja)."""
+    ruta = item.get("imagen")
+    return bool(item.get("imagen_datos")) or bool(isinstance(ruta, str) and ruta.strip())
+
+
+def foto_bebida(
+    item: dict,
+    crear_respaldo: Callable[[], ft.Control],
+    grande: bool = False,
+    **opciones,
+) -> ft.Control:
     """Foto de una bebida o, si no tiene, el control de respaldo (emoji).
 
     `item` puede traer:
@@ -198,7 +246,7 @@ def foto_bebida(item: dict, crear_respaldo: Callable[[], ft.Control], **opciones
     """
     datos = item.get("imagen_datos")
     if datos:
-        return imagen_desde_bytes(datos, error_content=crear_respaldo(), **opciones)
+        return imagen_desde_bytes(datos, grande=grande, error_content=crear_respaldo(), **opciones)
 
     ruta = item.get("imagen")
     ruta = ruta.strip() if isinstance(ruta, str) else ""

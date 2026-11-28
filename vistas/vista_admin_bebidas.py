@@ -31,7 +31,7 @@ from servicios.servicio_imagenes_bebidas import (
     guardar_imagen_desde_archivo,
     imagenes_de_bebidas,
 )
-from utilidades.imagenes import foto_bebida
+from utilidades.imagenes import foto_bebida, vaso_respaldo
 
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
@@ -179,7 +179,7 @@ def admin_bebidas_view(page: ft.Page, nombre: str) -> ft.View:
             alignment=ft.Alignment(0, 0),
             clip_behavior=ft.ClipBehavior.ANTI_ALIAS,
             content=foto_bebida(
-                foto, lambda: ft.Text("🧋", size=26),
+                foto, lambda: vaso_respaldo(56),
                 width=56, height=56, fit=ft.BoxFit.COVER,
             ),
         )

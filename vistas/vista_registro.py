@@ -624,7 +624,6 @@ def RegistroView(page: ft.Page, tipo: str):
                             alignment=ft.MainAxisAlignment.CENTER,
                             spacing=12,
                         ),
-                        ft.Text("♥", size=20, color=COLOR_ROSA, text_align=ft.TextAlign.CENTER),
                     ],
                     horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                     spacing=6,

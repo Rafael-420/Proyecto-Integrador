@@ -144,10 +144,21 @@ def punto_venta_view(page: ft.Page, nombre: str) -> ft.View:
                 tarjetas,
             ],
             spacing=10,
+            # En el celular las tres tarjetas no caben en la pantalla y
+            # la de Caja Chica quedaba cortada sin forma de bajar.
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
         ),
     )
 
-    layout = sidebar_layout(page, sidebar, main_content)
+    # STRETCH: el panel ocupa todo el alto y las tarjetas quedan arriba
+    # (antes el Row lo centraba y quedaba flotando a media pantalla).
+    layout = sidebar_layout(
+        page,
+        sidebar,
+        main_content,
+        alineacion_vertical=ft.CrossAxisAlignment.STRETCH,
+    )
 
     # ------------------------------------------------------------------
     # APPBAR (SIN ICONO LATERAL, YA TENEMOS SIDEBAR FIJO)

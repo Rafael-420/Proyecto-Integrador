@@ -3,7 +3,7 @@
 import flet as ft
 
 from utilidades.flet_compat import al_seleccionar
-from utilidades.imagenes import foto_bebida
+from utilidades.imagenes import foto_bebida, vaso_respaldo
 
 if not hasattr(ft, "icons") and hasattr(ft, "Icons"):
     ft.icons = ft.Icons
@@ -43,7 +43,7 @@ def _miniatura_encabezado(item: dict):
         scale=1,
         content=foto_bebida(
             item,
-            lambda: ft.Text(item.get("emoji", "🧋"), size=22),
+            lambda: vaso_respaldo(44),
             width=44,
             height=44,
             fit=ft.BoxFit.COVER,

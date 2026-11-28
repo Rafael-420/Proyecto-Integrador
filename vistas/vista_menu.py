@@ -38,6 +38,16 @@ from servicios.servicio_menu import (
 from servicios.servicio_horario import estado_menu
 from utilidades.formato import formatear_dinero
 from utilidades.flet_compat import set_texto_boton
+from utilidades.imagenes import (
+    RUTA_LOGO,
+    RUTA_PERSONAJE,
+    RUTA_VASO,
+    imagen_proyecto,
+)
+
+# Marca para usar la imagen del vaso como ícono de notificación (las
+# demás siguen siendo emojis de estado: ⏳, 💳, 🎉...).
+ICONO_VASO = "__vaso__"
 
 
 # ------------------------------------------------------------
@@ -1286,7 +1296,11 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
                         border_radius=18,
                         bgcolor=color,
                         alignment=ALIGN_CENTER,
-                        content=ft.Text(icono, size=23),
+                        content=(
+                            imagen_proyecto(RUTA_VASO, 28, "En preparación")
+                            if icono == ICONO_VASO
+                            else ft.Text(icono, size=23)
+                        ),
                     ),
                     ft.Column(
                         controls=[
@@ -1340,7 +1354,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
         # Historial y Estado), para que todo diga lo mismo.
         estilos = {
             ESTATUS_PEDIDO_REALIZADO: ("⏳", "#FEF3C7", "Tu pedido llegó a caja. En cuanto lo confirmen empezamos a prepararlo."),
-            ESTATUS_EN_PREPARACION: ("🧋", "#F3E8FF", "Tu pago se registró y nuestros baristas ya preparan tu bebida."),
+            ESTATUS_EN_PREPARACION: (ICONO_VASO, "#F3E8FF", "Tu pago se registró y nuestros baristas ya preparan tu bebida."),
             ESTATUS_PAGADO: ("💳", "#E0F2FE", "Tu pago fue registrado correctamente."),
             ESTATUS_ENTREGADO: ("🎉", "#DCFCE7", "Pedido entregado. Esperamos que lo disfrutes."),
             ESTATUS_CANCELADO: ("🚫", "#F3F4F6", "Este pedido fue cancelado."),
@@ -1523,7 +1537,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
                             bgcolor=COLOR_FONDO_SUAVE,
                             alignment=ALIGN_CENTER,
                             shadow=_shadow(24, 8, "#EC489933"),
-                            content=ft.Text("🧋", size=62),
+                            content=imagen_proyecto(RUTA_PERSONAJE, 104, "Personaje de Corallie Bubble"),
                             animate_scale=ft.Animation(260, ft.AnimationCurve.EASE_OUT),
                         ),
                     ],
@@ -1537,16 +1551,6 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
     # siquiera coincidían con las categorías reales de las bebidas. Ahora
     # se generan a partir de las categorías presentes en el catálogo y
     # sí filtran el grid al hacer clic.
-    EMOJIS_CATEGORIA = {
-        "Todos": "🧋",
-        "Milk Tea": "🍓",
-        "Especialidad": "🍵",
-        "Clásicos": "🍫",
-        "Smoothies": "🍒",
-        "Frappés": "🍦",
-        "General": "✨",
-    }
-
     chips_categorias = []  # (contenedor, texto_ctrl, nombre_cat)
 
     def _repintar_categorias():
@@ -1557,7 +1561,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             contenedor.shadow = _shadow(20, 6, "#C86DD733") if seleccionado else None
             texto_ctrl.color = "white" if seleccionado else COLOR_TEXTO
 
-    def _construir_chip_categoria(nombre_cat: str, emoji_cat: str):
+    def _construir_chip_categoria(nombre_cat: str):
         texto_ctrl = ft.Text(
             nombre_cat, color=COLOR_TEXTO, weight=ft.FontWeight.BOLD, font_family=FUENTE_BASE
         )
@@ -1574,7 +1578,8 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
             border=ft.border.all(1, "#EED7F4"),
             ink=True,
             on_click=click,
-            content=ft.Row([ft.Text(emoji_cat), texto_ctrl], spacing=8),
+            # Solo el nombre de la categoría, sin emoji.
+            content=texto_ctrl,
         )
         chips_categorias.append((contenedor, texto_ctrl, nombre_cat))
         return contenedor
@@ -1587,7 +1592,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
 
     categorias_row = ft.Row(
         controls=[
-            _construir_chip_categoria(cat, EMOJIS_CATEGORIA.get(cat, "✨"))
+            _construir_chip_categoria(cat)
             for cat in nombres_categorias
         ],
         spacing=10,
@@ -1644,7 +1649,7 @@ def menu_interactivo_view(page: ft.Page, nombre: str, cliente_id: int | None = N
                     bgcolor="#FBE7F4",
                     alignment=ALIGN_CENTER,
                     shadow=_shadow(18, 5, "#C86DD722"),
-                    content=ft.Text("🧋", size=32),
+                    content=imagen_proyecto(RUTA_LOGO, 48, "Logo de Corallie Bubble"),
                 ),
                 ft.Column(
                     controls=[

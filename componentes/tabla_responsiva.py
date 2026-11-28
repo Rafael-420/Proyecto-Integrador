@@ -1,5 +1,16 @@
 """Tabla que se adapta al ancho de la pantalla.
 
+Nov 2026: por defecto ya no se usa la tabla (DataTable). Se muestran
+siempre las tarjetas, que son las que funcionan bien en el celular. En
+pantallas anchas las tarjetas se acomodan en 2 o 3 columnas con un
+ResponsiveRow, que se reacomoda solo en el navegador sin depender de que
+Python sepa el ancho de la pantalla.
+
+Motivo: el cambio de tabla a tarjetas dependía de page.on_resized, que
+en Flet 0.80 se llama on_resize; el evento nunca llegaba y en varios
+casos se quedaba la tabla, que en el celular no se puede usar. Si alguna
+pantalla quiere la tabla de escritorio, puede pasar siempre_tarjetas=False.
+
 En escritorio dibuja un ft.DataTable normal, como siempre.
 En pantallas angostas (celular) dibuja una tarjeta por registro, para
 no obligar al usuario a arrastrar la tabla de lado a lado.
@@ -152,6 +163,7 @@ class TablaResponsiva:
         iniciales=None,
         umbral_movil: int = UMBRAL_MOVIL,
         mensaje_vacio: str = "No hay registros para mostrar.",
+        siempre_tarjetas: bool = True,
     ):
         self.page = page
         self.columnas = columnas
@@ -161,6 +173,7 @@ class TablaResponsiva:
         self.fn_iniciales = iniciales
         self.umbral_movil = umbral_movil
         self.mensaje_vacio = mensaje_vacio
+        self.siempre_tarjetas = siempre_tarjetas
 
         self.filas: list = []
         self._expandidas: set = set()
@@ -177,7 +190,16 @@ class TablaResponsiva:
             column_spacing=18,
         )
 
-        self.contenedor_tarjetas = ft.Column(controls=[], spacing=10, tight=True)
+        if siempre_tarjetas:
+            # 1 columna en celular, 2 en tableta y 3 en escritorio.
+            self.contenedor_tarjetas = ft.ResponsiveRow(
+                controls=[],
+                spacing=12,
+                run_spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.START,
+            )
+        else:
+            self.contenedor_tarjetas = ft.Column(controls=[], spacing=10, tight=True)
 
         self.control = ft.Container(expand=True, padding=0)
 
@@ -188,6 +210,8 @@ class TablaResponsiva:
     # Detección de ancho
     # ------------------------------------------------------------------
     def es_movil(self) -> bool:
+        if self.siempre_tarjetas:
+            return True
         ancho = getattr(self.page, "width", None)
         if not ancho:
             return False
@@ -372,9 +396,15 @@ class TablaResponsiva:
         return titulo[:2].upper() if titulo else "--"
 
     def _llenar_tarjetas(self):
-        self.contenedor_tarjetas.controls = [
+        tarjetas = [
             self._crear_tarjeta(indice, fila) for indice, fila in enumerate(self.filas)
         ]
+        if self.siempre_tarjetas:
+            tarjetas = [
+                ft.Container(col={"xs": 12, "md": 6, "xl": 4}, content=t)
+                for t in tarjetas
+            ]
+        self.contenedor_tarjetas.controls = tarjetas
 
     def _crear_tarjeta(self, indice: int, fila: dict):
         abierta = indice in self._expandidas
